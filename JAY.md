@@ -20,10 +20,15 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
    (`easytier/src/rpc_service/api.rs`)
 3. **No remote management.** `--config-server` hands the whole node to a web console on another
    machine. Jay never uses it, so `easytier-core` refuses to start with it. (`easytier/src/core.rs`)
-4. **Fewer features.** Built with `--no-default-features --features
+4. **No VPN portal, no http(s) peer lists.** The WireGuard VPN portal opens an extra public port
+   for plain WireGuard clients, and an `http(s)://` peer URL lets that web server choose which
+   nodes this one joins. They can't be compiled out separately, so the build refuses them at runtime.
+   (`easytier/src/instance/instance.rs`, `easytier/src/connector/mod.rs`)
+5. **Fewer features.** Built with `--no-default-features --features
    wireguard,smoltcp,tun,socks5,quic,zstd`. Websocket, KCP, FakeTCP and magic DNS are left out.
-5. **Build hygiene** (`.github/workflows/jay-build.yml`):
+6. **Build hygiene** (`.github/workflows/jay-build.yml`):
    - The build runs with `--locked`, and `cargo audit` runs on every build.
+   - Every GitHub Action is pinned to a commit hash.
    - protoc is downloaded with a pinned SHA-256, not by the Windows build script.
    - The prebuilt Windows files in `easytier/third_party` are pinned by SHA-256. wintun and the
      WinDivert driver must carry valid Authenticode signatures.
@@ -34,6 +39,13 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
   and an explicit `--encryption-algorithm`. Without secure mode, the data key is derived from the
   network secret with a fast, unkeyed hash (SipHash via `DefaultHasher`). That key is static and
   has no forward secrecy. Check compatibility with the relay nodes Jay uses before turning it on.
+
+## Security updates
+
+Upstream releases are not taken wholesale. When an upstream release or advisory fixes a security
+problem, we write or port the fix on this branch ourselves after reading it. Other upstream changes
+are only taken when Jay needs them. Watch the EasyTier repo's releases and the RustSec advisories that
+`cargo audit` reports.
 
 ## Updating to a new upstream version
 

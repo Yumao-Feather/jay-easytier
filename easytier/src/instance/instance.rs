@@ -1128,6 +1128,11 @@ impl Instance {
     }
 
     pub async fn run_vpn_portal(&mut self) -> Result<(), Error> {
+        // Jay hardening: the WireGuard VPN portal opens an extra public port that lets plain
+        // WireGuard clients into the network. Jay never uses it, so this build refuses to start one.
+        if self.global_ctx.get_vpn_portal_cidr().is_some() {
+            return Err(anyhow::anyhow!("the VPN portal is disabled in this build").into());
+        }
         if self.global_ctx.get_vpn_portal_cidr().is_none() {
             return Err(anyhow::anyhow!("vpn portal cidr not set.").into());
         }

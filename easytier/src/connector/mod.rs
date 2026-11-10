@@ -10,6 +10,7 @@ use crate::{
     },
     utils::BoxExt,
 };
+#[allow(unused_imports)]
 use http_connector::HttpTunnelConnector;
 use rand::seq::SliceRandom;
 
@@ -280,8 +281,13 @@ pub async fn create_connector_by_url(
         }
         #[cfg(unix)]
         TunnelScheme::Unix => tunnel::unix::UnixSocketTunnelConnector::new(url).boxed(),
+        // Jay hardening: an http(s) peer URL lets whoever runs that web server decide which nodes
+        // this one connects to. Jay never uses it, so this build refuses it.
         TunnelScheme::Http | TunnelScheme::Https => {
-            HttpTunnelConnector::new(url, global_ctx.clone()).boxed()
+            return Err(Error::InvalidUrl(format!(
+                "http(s) peer lists are disabled in this build: {}",
+                url
+            )));
         }
         TunnelScheme::Ring => RingTunnelConnector::new(url).boxed(),
         TunnelScheme::Txt | TunnelScheme::Srv => {

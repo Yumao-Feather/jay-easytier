@@ -33,7 +33,7 @@ jobs:
     name: Unit tests and dependency audit
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -60,7 +60,7 @@ jobs:
           cargo install cargo-audit --locked --version 0.21.2
           cargo audit --file Cargo.lock | tee audit.txt || echo "::warning::cargo audit reported advisories, see audit.txt"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: cargo-audit
@@ -82,7 +82,7 @@ jobs:
           - { platform: linux-aarch64, target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -180,7 +180,7 @@ jobs:
           (cd dist && (command -v sha256sum >/dev/null && sha256sum "$zip_name" || shasum -a 256 "$zip_name") | tee "$zip_name.sha256")
           wc -c < "dist/$zip_name"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: easytier-${{ matrix.platform }}
           path: |
@@ -195,7 +195,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           path: dist
           merge-multiple: true
