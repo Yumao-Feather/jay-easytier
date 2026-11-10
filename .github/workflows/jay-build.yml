@@ -47,6 +47,9 @@ jobs:
       - name: Rust toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
 
+      - name: Linker (.cargo/config.toml links linux-gnu with mold)
+        run: sudo apt-get update -q && sudo apt-get install -qy mold
+
       - name: Lockfile is up to date
         run: cargo metadata --locked --format-version 1 > /dev/null
 
@@ -104,7 +107,8 @@ jobs:
 
       - name: musl tools
         if: runner.os == 'Linux'
-        run: sudo apt-get update -q && sudo apt-get install -qy musl-tools
+        # mold: build scripts are linked for the linux-gnu host, which .cargo/config.toml links with mold.
+        run: sudo apt-get update -q && sudo apt-get install -qy musl-tools mold
 
       - name: Rust toolchain and target
         run: |

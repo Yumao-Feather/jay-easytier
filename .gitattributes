@@ -1,0 +1,2 @@
+# Pinned by SHA-256 in jay-build.yml: never convert line endings on checkout.
+easytier/third_party/** -text
