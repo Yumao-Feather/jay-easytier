@@ -1,0 +1,216 @@
+name: Jay build
+
+# Jay's own build of EasyTier: the pinned upstream tag plus the small hardening patches on
+# this branch (see JAY.md). Every run builds the command-line programs for the seven
+# platforms Jay ships. A tag named jay-v* also publishes the zips and their SHA-256 sums as
+# a release; Jay pins those hashes in src/Amber.Core/Multiplayer/EasyTier.cs.
+
+on:
+  push:
+    branches: ["jay/**"]
+    tags: ["jay-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jay-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Only what Jay uses. Left out on purpose: websocket, kcp, faketcp and magic-dns.
+  JAY_FEATURES: wireguard,smoltcp,tun,socks5,quic,zstd
+  PROTOC_VERSION: "29.3"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: Unit tests and dependency audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install protoc (pinned SHA-256)
+        run: |
+          curl -fsSL -o protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          echo "3e866620c5be27664f3d2fa2d656b5f3e09b5152b42f1bedbf427b333e90021a  protoc.zip" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/protoc" && unzip -q protoc.zip -d "$RUNNER_TEMP/protoc"
+          echo "PROTOC=$RUNNER_TEMP/protoc/bin/protoc" >> "$GITHUB_ENV"
+
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Lockfile is up to date
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
+      - name: Jay patch tests
+        run: |
+          cargo test --locked -p easytier --no-default-features --features "$JAY_FEATURES" --lib -- \
+            rpc_service::api::jay_rpc_portal_tests peers::encrypt
+
+      - name: Dependency audit (RustSec)
+        run: |
+          cargo install cargo-audit --locked --version 0.21.2
+          cargo audit --file Cargo.lock | tee audit.txt || echo "::warning::cargo audit reported advisories, see audit.txt"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cargo-audit
+          path: audit.txt
+          if-no-files-found: ignore
+
+  build:
+    name: Build ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: windows-x86_64, target: x86_64-pc-windows-msvc, os: windows-latest, third_party: x86_64, exe: .exe }
+          - { platform: windows-i686, target: i686-pc-windows-msvc, os: windows-latest, third_party: i686, exe: .exe }
+          - { platform: windows-arm64, target: aarch64-pc-windows-msvc, os: windows-11-arm, third_party: arm64, exe: .exe }
+          - { platform: macos-x86_64, target: x86_64-apple-darwin, os: macos-latest }
+          - { platform: macos-aarch64, target: aarch64-apple-darwin, os: macos-latest }
+          - { platform: linux-x86_64, target: x86_64-unknown-linux-musl, os: ubuntu-24.04 }
+          - { platform: linux-aarch64, target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install protoc (pinned SHA-256)
+        run: |
+          case "$RUNNER_OS-$RUNNER_ARCH" in
+            Linux-X64)   file=linux-x86_64;          sha=3e866620c5be27664f3d2fa2d656b5f3e09b5152b42f1bedbf427b333e90021a ;;
+            Linux-ARM64) file=linux-aarch_64;        sha=6427349140e01f06e049e707a58709a4f221ae73ab9a0425bc4a00c8d0e1ab32 ;;
+            macOS-*)     file=osx-universal_binary;  sha=57e0423af36b491ba4d043c4a5b5346ce73464c397911b9ecb7ddf9b573896da ;;
+            Windows-*)   file=win64;                 sha=57ea59e9f551ad8d71ffaa9b5cfbe0ca1f4e720972a1db7ec2d12ab44bff9383 ;;
+            *) echo "no protoc for $RUNNER_OS-$RUNNER_ARCH"; exit 1 ;;
+          esac
+          curl -fsSL -o protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-${file}.zip"
+          actual=$( (command -v sha256sum >/dev/null && sha256sum protoc.zip || shasum -a 256 protoc.zip) | cut -d' ' -f1)
+          [ "$actual" = "$sha" ] || { echo "protoc hash mismatch: $actual"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/protoc" && unzip -q protoc.zip -d "$RUNNER_TEMP/protoc"
+          exe=""; [ "$RUNNER_OS" = Windows ] && exe=.exe
+          echo "PROTOC=$RUNNER_TEMP/protoc/bin/protoc$exe" >> "$GITHUB_ENV"
+
+      - name: musl tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -qy musl-tools
+
+      - name: Rust toolchain and target
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add ${{ matrix.target }}
+
+      - name: Check bundled Windows binaries
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # The upstream repo commits these prebuilt files. Pin them, and require valid
+          # Authenticode signatures on wintun (WireGuard) and the WinDivert driver.
+          $dir = "easytier/third_party/${{ matrix.third_party }}"
+          $pins = @{
+            "x86_64/wintun.dll"        = "e5da8447dc2c320edc0fc52fa01885c103de8c118481f683643cacc3220dafce"
+            "x86_64/Packet.dll"        = "c7c03a87eac7243ccbe331554624b18803010b740e311fc8cfddb573096eacac"
+            "x86_64/Packet.lib"        = "5be8eb0ef57344cedc940fd81edbf7fc98680ba0c8337b577e7fdc448408130b"
+            "x86_64/WinDivert64.sys"   = "8da085332782708d8767bcace5327a6ec7283c17cfb85e40b03cd2323a90ddc2"
+            "i686/wintun.dll"          = "d694fa46ab4cfebcb2632d094c7aa97278eef2f8052438621766d863ae98a931"
+            "i686/Packet.dll"          = "f0ab4f5457bd48958b72d6849148e1ece6dbc1059435dfe695051fc32b8cdc19"
+            "i686/Packet.lib"          = "ca4864813a4b2d4c21b6e4b33bcdcab55e307558528f71b3d4637e8a605375c6"
+            "i686/WinDivert32.sys"     = "2f43f4251be4d72dd56c91bf6cce475d379eb9ba6c4dda2be3022ea633d5e807"
+            "arm64/wintun.dll"         = "f7ba89005544be9d85231a9e0d5f23b2d15b3311667e2dad0debd344918a3f80"
+            "arm64/Packet.dll"         = "fe56bf638c1f05751a4f36377d71f48fb7f43446e92475eda32dc0f4f2ebd60c"
+            "arm64/Packet.lib"         = "0cf77885db5cbd8152dd23744843bf39220372c4e961a5df79875ccf54316387"
+            # 83-byte text placeholder upstream ships (WinDivert has no arm64 build); Jay checks the file exists.
+            "arm64/WinDivert64.sys"    = "19d4fc01593d6f9798c9e7de3d7dade906db97872ca1f281c96e40dd9ff85d50"
+          }
+          $failed = $false
+          Get-ChildItem $dir -File | ForEach-Object {
+            $key = "${{ matrix.third_party }}/$($_.Name)"
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            if (-not $pins.ContainsKey($key)) { Write-Host "::error::unpinned file $key"; $failed = $true }
+            elseif ($pins[$key] -ne $hash) { Write-Host "::error::$key hash $hash does not match the pin"; $failed = $true }
+            if ($_.Extension -in ".dll", ".sys") {
+              $sig = Get-AuthenticodeSignature $_.FullName
+              Write-Host "$key signature: $($sig.Status) $($sig.SignerCertificate.Subject)"
+              $placeholder = $_.Length -lt 1024
+              if ($_.Name -match "^(wintun\.dll|WinDivert(64|32)\.sys)$" -and -not $placeholder -and $sig.Status -ne "Valid") {
+                Write-Host "::error::$key is not validly signed"; $failed = $true
+              }
+            }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Build
+        run: |
+          cargo build --locked --release -p easytier --target ${{ matrix.target }} \
+            --no-default-features --features "$JAY_FEATURES" \
+            --bin easytier-core --bin easytier-cli
+
+      - name: Package
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' easytier/Cargo.toml | head -n 1)
+          jay_rev=$(git rev-parse --short=12 HEAD)
+          name="easytier-${{ matrix.platform }}"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/easytier-core${{ matrix.exe }}" "dist/$name/"
+          cp "target/${{ matrix.target }}/release/easytier-cli${{ matrix.exe }}" "dist/$name/"
+          if [ "${{ runner.os }}" = Windows ]; then
+            find "easytier/third_party/${{ matrix.third_party }}" -maxdepth 1 -type f \( -name '*.dll' -o -name '*.sys' \) \
+              -exec cp {} "dist/$name/" \;
+          fi
+          printf 'EasyTier %s with Jay hardening patches\nsource: %s/%s/commit/%s\nfeatures: %s\nlicense: LGPL-3.0\n' \
+            "$version" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$JAY_FEATURES" > "dist/$name/JAY-BUILD.txt"
+          cp LICENSE "dist/$name/LICENSE"
+          zip_name="easytier-${{ matrix.platform }}-v${version}-jay-${jay_rev}.zip"
+          if [ "${{ runner.os }}" = Windows ]; then
+            (cd dist && 7z a -tzip -bd "$zip_name" "$name" > /dev/null)
+          else
+            (cd dist && zip -qrX "$zip_name" "$name")
+          fi
+          (cd dist && (command -v sha256sum >/dev/null && sha256sum "$zip_name" || shasum -a 256 "$zip_name") | tee "$zip_name.sha256")
+          wc -c < "dist/$zip_name"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: easytier-${{ matrix.platform }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/jay-v')
+    needs: [test, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: SHA-256 list
+        run: |
+          cd dist
+          cat *.sha256 | sort -k2 > SHA256SUMS.txt
+          for f in *.zip; do printf '%s  %s\n' "$(wc -c < "$f" | tr -d ' ')" "$f"; done > SIZES.txt
+          cat SHA256SUMS.txt SIZES.txt
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" \
+            --notes "EasyTier with Jay hardening patches. See JAY.md on the tagged commit. Jay pins the SHA-256 values in SHA256SUMS.txt." \
+            dist/*.zip dist/SHA256SUMS.txt dist/SIZES.txt

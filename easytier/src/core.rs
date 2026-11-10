@@ -1335,6 +1335,12 @@ async fn run_main(cli: Cli) -> anyhow::Result<()> {
     defer!(dump_profile(0););
     log::init(&cli.logging_options, true)?;
 
+    // Jay hardening: no remote management. --config-server hands the whole node to a web
+    // console on another machine; Jay never uses it, so this build refuses to start with it.
+    if cli.config_server.is_some() {
+        anyhow::bail!("--config-server (remote management) is disabled in this build");
+    }
+
     let manager = Arc::new(NetworkInstanceManager::new().with_config_path(cli.config_dir.clone()));
 
     let _rpc_server = ApiRpcServer::new(

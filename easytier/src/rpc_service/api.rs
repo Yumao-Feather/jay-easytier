@@ -175,9 +175,11 @@ pub fn register_api_rpc_service(
     );
 }
 
+// Jay hardening: the management API only ever listens on loopback. A bare port binds
+// 127.0.0.1 instead of 0.0.0.0, and any non-loopback address is refused.
 fn parse_rpc_portal(rpc_portal: Option<String>) -> anyhow::Result<SocketAddr> {
-    if let Some(Ok(port)) = rpc_portal.as_ref().map(|s| s.parse::<u16>()) {
-        Ok(SocketAddr::from(([0, 0, 0, 0], port)))
+    let addr = if let Some(Ok(port)) = rpc_portal.as_ref().map(|s| s.parse::<u16>()) {
+        SocketAddr::from(([127, 0, 0, 1], port))
     } else {
         let mut rpc_addr = rpc_portal
             .map(|addr| {
@@ -186,14 +188,21 @@ fn parse_rpc_portal(rpc_portal: Option<String>) -> anyhow::Result<SocketAddr> {
             })
             .transpose()?;
         select_proper_rpc_port(&mut rpc_addr)?;
-        rpc_addr.ok_or_else(|| anyhow::anyhow!("failed to parse rpc portal address"))
+        rpc_addr.ok_or_else(|| anyhow::anyhow!("failed to parse rpc portal address"))?
+    };
+    if !addr.ip().is_loopback() {
+        anyhow::bail!(
+            "rpc portal must listen on a loopback address in this build, got {}",
+            addr
+        );
     }
+    Ok(addr)
 }
 
 fn select_proper_rpc_port(addr: &mut Option<SocketAddr>) -> anyhow::Result<()> {
     match addr {
         None => {
-            *addr = Some(SocketAddr::from(([0, 0, 0, 0], 0)));
+            *addr = Some(SocketAddr::from(([127, 0, 0, 1], 0)));
             select_proper_rpc_port(addr)?;
             Ok(())
         }
@@ -209,5 +218,30 @@ fn select_proper_rpc_port(addr: &mut Option<SocketAddr>) -> anyhow::Result<()> {
             }
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod jay_rpc_portal_tests {
+    use super::parse_rpc_portal;
+
+    #[test]
+    fn bare_port_binds_loopback() {
+        let addr = parse_rpc_portal(Some("15999".to_owned())).unwrap();
+        assert!(addr.ip().is_loopback());
+        assert_eq!(addr.port(), 15999);
+    }
+
+    #[test]
+    fn explicit_loopback_is_kept() {
+        let addr = parse_rpc_portal(Some("127.0.0.1:15998".to_owned())).unwrap();
+        assert_eq!(addr.to_string(), "127.0.0.1:15998");
+        assert!(parse_rpc_portal(Some("[::1]:15997".to_owned())).is_ok());
+    }
+
+    #[test]
+    fn non_loopback_is_refused() {
+        assert!(parse_rpc_portal(Some("0.0.0.0:15996".to_owned())).is_err());
+        assert!(parse_rpc_portal(Some("192.168.1.2:15995".to_owned())).is_err());
     }
 }

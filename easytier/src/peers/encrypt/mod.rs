@@ -13,6 +13,7 @@ pub mod aes_gcm;
 #[cfg(feature = "openssl-crypto")]
 pub mod openssl;
 
+#[allow(dead_code)]
 pub mod xor;
 
 #[derive(thiserror::Error, Debug)]
@@ -56,27 +57,48 @@ impl Encryptor for NullCipher {
     }
 }
 
+/// Refuses every packet. Used instead of a weak or unknown cipher (Jay hardening).
+pub struct RejectCipher;
+
+impl Encryptor for RejectCipher {
+    fn decrypt(&self, _zc_packet: &mut ZCPacket) -> Result<(), Error> {
+        Err(Error::DecryptionFailed)
+    }
+
+    fn encrypt(&self, _zc_packet: &mut ZCPacket) -> Result<(), Error> {
+        Err(Error::EncryptionFailed)
+    }
+}
+
+// Jay builds always need a real AEAD cipher.
+#[cfg(not(any(feature = "aes-gcm", feature = "wireguard", feature = "openssl-crypto")))]
+compile_error!("Jay's EasyTier build needs an AEAD cipher: enable the wireguard, aes-gcm or openssl-crypto feature");
+
 /// Create an encryptor based on the algorithm name
 pub fn create_encryptor(
     algorithm: &str,
     key_128: [u8; 16],
     #[allow(unused_variables)] key_256: [u8; 32],
 ) -> Arc<dyn Encryptor> {
+    // Jay hardening: never fall back silently. An unknown or weak algorithm name gets a
+    // cipher that refuses every packet, so traffic is dropped instead of being sent with a
+    // cipher the operator did not ask for.
     let algorithm = match EncryptionAlgorithm::try_from(algorithm) {
         Ok(algorithm) => algorithm,
         Err(_) => {
-            let default = EncryptionAlgorithm::default();
-            log::warn!(
-                "Unknown encryption algorithm: {}, falling back to default {}",
-                algorithm,
-                default
+            log::error!(
+                "Unknown encryption algorithm: {}, refusing to encrypt or decrypt",
+                algorithm
             );
-            default
+            return Arc::new(RejectCipher);
         }
     };
 
     match algorithm {
-        EncryptionAlgorithm::Xor => Arc::new(xor::XorCipher::new(&key_128)),
+        EncryptionAlgorithm::Xor => {
+            log::error!("xor is not encryption; this build refuses to use it");
+            Arc::new(RejectCipher)
+        }
 
         #[cfg(any(feature = "aes-gcm", feature = "wireguard", feature = "openssl-crypto"))]
         EncryptionAlgorithm::AesGcm => {
@@ -102,6 +124,41 @@ pub fn create_encryptor(
                 feature = "openssl-crypto" => Arc::new(openssl::OpenSslCipher::new_chacha20(key_256)),
                 feature = "wireguard" => Arc::new(ring::RingCipher::new_chacha20(key_256)),
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod jay_tests {
+    use super::*;
+
+    #[test]
+    fn unknown_algorithm_refuses_instead_of_falling_back() {
+        let cipher = create_encryptor("no-such-cipher", [1; 16], [2; 32]);
+        let mut packet = ZCPacket::new_with_payload(b"hello");
+        packet.fill_peer_manager_hdr(0, 0, 0);
+        assert!(cipher.encrypt(&mut packet).is_err());
+        assert!(cipher.decrypt(&mut packet).is_err());
+    }
+
+    #[test]
+    fn xor_is_refused() {
+        let cipher = create_encryptor("xor", [1; 16], [2; 32]);
+        let mut packet = ZCPacket::new_with_payload(b"hello");
+        packet.fill_peer_manager_hdr(0, 0, 0);
+        assert!(cipher.encrypt(&mut packet).is_err());
+    }
+
+    #[test]
+    fn real_ciphers_still_round_trip() {
+        for name in ["aes-gcm", "aes-256-gcm", "chacha20"] {
+            let cipher = create_encryptor(name, [1; 16], [2; 32]);
+            let mut packet = ZCPacket::new_with_payload(b"hello");
+            packet.fill_peer_manager_hdr(0, 0, 0);
+            cipher.encrypt(&mut packet).unwrap();
+            assert_ne!(packet.payload(), b"hello", "{name} did not encrypt");
+            cipher.decrypt(&mut packet).unwrap();
+            assert_eq!(packet.payload(), b"hello", "{name} did not round-trip");
         }
     }
 }

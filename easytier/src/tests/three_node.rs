@@ -933,7 +933,6 @@ pub async fn basic_three_node_test(
         ["aes-gcm", "aes-gcm"],
         ["aes-256-gcm", "aes-256-gcm"],
         ["chacha20", "chacha20"],
-        ["xor", "xor"],
         ["openssl-chacha20", "openssl-chacha20"],
         ["openssl-aes-gcm", "openssl-aes-gcm"],
         ["openssl-aes-256-gcm", "openssl-aes-256-gcm"],
