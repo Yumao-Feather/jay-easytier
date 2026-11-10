@@ -43,3 +43,4 @@ easytier-gui/src-tauri/*.sys
 
 .direnv
 .flake-profile
+.jay-index/
