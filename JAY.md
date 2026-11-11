@@ -62,17 +62,17 @@ are only taken when Jay needs them. Watch the EasyTier repo's releases and the R
 
 ## Signing
 
-Every release is signed by 2 of the 3 Jay trustees, each with Ed25519 and ML-DSA-65, the same way as a
+Every release is signed by 2 of the 3 Jay trustees with their release keys (never their network keys), each with Ed25519 and ML-DSA-65, the same way as a
 Jay release but marked as an EasyTier build so the two can't be swapped. The keys stay on the trustees'
 offline machines; CI never has one. The seq is 1 for `jay-v2.6.4-1` and one more for every later release.
 
 ```bash
 gh release download <tag> --repo Yumao-Feather/jay-easytier --pattern 'SHA256SUMS.txt' --dir et
 jay-server release prepare --component easytier --tag <tag> --seq <n> --commit <full commit id> --sums et/SHA256SUMS.txt
-jay-server release cosign --key my-trust.key --sums et/SHA256SUMS.txt   # each of two trustees, offline
+jay-server release cosign --key jay-release.key --sums et/SHA256SUMS.txt   # each of two trustees, offline
 gh release upload <tag> --repo Yumao-Feather/jay-easytier et/SHA256SUMS.txt.sigs
 jay-server release verify et/<one package>.zip --component easytier --tag <tag>
 ```
 
-Jay ships the signature and refuses to install EasyTier when it doesn't verify (once trustee keys are
+Jay ships the signature and refuses to install EasyTier when it doesn't verify (once release keys are
 built into Jay). Details: `docs/security/release-signing.md` in the Jay repository.
