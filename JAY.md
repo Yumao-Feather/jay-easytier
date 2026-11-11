@@ -53,6 +53,26 @@ are only taken when Jay needs them. Watch the EasyTier repo's releases and the R
    `Cargo.lock`, `build.rs`, `easytier/third_party` and anything that touches the network.
 2. Create `jay/<new tag>` from the new tag, and cherry-pick the patch commits from this branch.
 3. Update the pins in the workflow if `third_party` changed (and say why in the commit).
-4. Tag `jay-v<version>-<n>`. The release job publishes the zips and `SHA256SUMS.txt`.
-5. In Jay, update the version, asset names, sizes and SHA-256 values in
-   `src/Amber.Core/Multiplayer/EasyTier.cs`.
+4. Tag `jay-v<version>-<n>`. The release job creates a **draft** release with the zips,
+   `SHA256SUMS.txt` and `SIZES.txt`.
+5. Have it signed (below), then publish the draft.
+6. In Jay, update the version, asset names, sizes, SHA-256 values, full commit and seq in
+   `src/Amber.Core/Multiplayer/EasyTier.cs`, and copy `SHA256SUMS.txt` and `SHA256SUMS.txt.sigs` into
+   `src/Amber.Core/Multiplayer/EasyTierSigned/`.
+
+## Signing
+
+Every release is signed by 2 of the 3 Jay trustees, each with Ed25519 and ML-DSA-65, the same way as a
+Jay release but marked as an EasyTier build so the two can't be swapped. The keys stay on the trustees'
+offline machines; CI never has one. The seq is 1 for `jay-v2.6.4-1` and one more for every later release.
+
+```bash
+gh release download <tag> --repo Yumao-Feather/jay-easytier --pattern 'SHA256SUMS.txt' --dir et
+jay-server release prepare --component easytier --tag <tag> --seq <n> --commit <full commit id> --sums et/SHA256SUMS.txt
+jay-server release cosign --key my-trust.key --sums et/SHA256SUMS.txt   # each of two trustees, offline
+gh release upload <tag> --repo Yumao-Feather/jay-easytier et/SHA256SUMS.txt.sigs
+jay-server release verify et/<one package>.zip --component easytier --tag <tag>
+```
+
+Jay ships the signature and refuses to install EasyTier when it doesn't verify (once trustee keys are
+built into Jay). Details: `docs/security/release-signing.md` in the Jay repository.

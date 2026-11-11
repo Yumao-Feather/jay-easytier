@@ -211,10 +211,12 @@ jobs:
           for f in *.zip; do printf '%s  %s\n' "$(wc -c < "$f" | tr -d ' ')" "$f"; done > SIZES.txt
           cat SHA256SUMS.txt SIZES.txt
 
-      - name: Create release
+      # A draft: 2 of the 3 Jay trustees sign SHA256SUMS.txt offline and upload SHA256SUMS.txt.sigs before it is
+      # published (JAY.md, "Signing"). Nothing in CI holds a signing key.
+      - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" \
-            --notes "EasyTier with Jay hardening patches. See JAY.md on the tagged commit. Jay pins the SHA-256 values in SHA256SUMS.txt." \
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --draft \
+            --notes "EasyTier with Jay hardening patches. See JAY.md on the tagged commit. Jay pins the SHA-256 values in SHA256SUMS.txt, and 2 of the 3 Jay trustees sign it (SHA256SUMS.txt.sigs)." \
             dist/*.zip dist/SHA256SUMS.txt dist/SIZES.txt
