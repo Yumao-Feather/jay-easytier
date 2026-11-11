@@ -26,8 +26,12 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
    (`easytier/src/instance/instance.rs`, `easytier/src/connector/mod.rs`)
 5. **Fewer features.** Built with `--no-default-features --features
    wireguard,smoltcp,tun,socks5,quic,zstd`. Websocket, KCP, FakeTCP and magic DNS are left out.
-6. **Build hygiene** (`.github/workflows/jay-build.yml`):
-   - The build runs with `--locked`, and `cargo audit` runs on every build.
+6. **No built-in public DNS servers.** When the system resolver failed, upstream also asked two fixed
+   public DNS servers, in plain UDP, for the host name. Only the system's own name servers are used now.
+   (`easytier/src/common/dns.rs`)
+7. **Build hygiene** (`.github/workflows/jay-build.yml`):
+   - The build runs with `--locked`, and `cargo audit` runs on every build. Any advisory not reviewed
+     in `.cargo/audit.toml` fails the build, so no release goes out with an unreviewed advisory.
    - Every GitHub Action is pinned to a commit hash.
    - protoc is downloaded with a pinned SHA-256, not by the Windows build script.
    - The prebuilt Windows files in `easytier/third_party` are pinned by SHA-256. wintun and the
@@ -46,6 +50,16 @@ Upstream releases are not taken wholesale. When an upstream release or advisory 
 problem, we write or port the fix on this branch ourselves after reading it. Other upstream changes
 are only taken when Jay needs them. Watch the EasyTier repo's releases and the RustSec advisories that
 `cargo audit` reports.
+
+### Log
+
+- **jay-v2.6.4-2** (2026-11-11). Checked upstream v2.7.0 and RustSec. Updated within semver:
+  quinn-proto 0.11.18 (remote DoS and panics in the QUIC tunnel and proxy), rustls 0.23.46 and
+  rustls-webpki 0.103.16 (handshake and certificate checks), h2 0.4.19, bytes 1.11.1,
+  crossbeam-channel 0.5.15, crossbeam-epoch 0.9.20, tracing-subscriber 0.3.23, webpki-roots 1.0.10,
+  zstd 0.13.4 / zstd-safe 7.4.0 / zstd-sys 2.0.17. Removed the built-in public DNS servers (patch 6).
+  Not taken: hickory-proto 0.26 (breaking; see `.cargo/audit.toml`). Upstream's ACL bypass fix does not
+  apply (Jay doesn't use EasyTier ACLs).
 
 ## Updating to a new upstream version
 

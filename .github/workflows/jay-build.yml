@@ -58,10 +58,13 @@ jobs:
           cargo test --locked -p easytier --no-default-features --features "$JAY_FEATURES" --lib -- \
             rpc_service::api::jay_rpc_portal_tests peers::encrypt
 
+      # Fails the build (and so the release) on any advisory not reviewed in .cargo/audit.toml.
+      # 0.21.x can't read the current advisory database, so it must be 0.22 or later.
       - name: Dependency audit (RustSec)
         run: |
-          cargo install cargo-audit --locked --version 0.21.2
-          cargo audit --file Cargo.lock | tee audit.txt || echo "::warning::cargo audit reported advisories, see audit.txt"
+          cargo install cargo-audit --locked --version 0.22.2
+          set -o pipefail
+          cargo audit --file Cargo.lock 2>&1 | tee audit.txt
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()

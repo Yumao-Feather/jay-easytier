@@ -4,8 +4,7 @@ use std::sync::atomic::AtomicBool;
 
 use anyhow::Context;
 use hickory_proto::runtime::TokioRuntimeProvider;
-use hickory_proto::xfer::Protocol;
-use hickory_resolver::config::{LookupIpStrategy, NameServerConfig, ResolverConfig, ResolverOpts};
+use hickory_resolver::config::{LookupIpStrategy, ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::{GenericConnector, TokioConnectionProvider};
 use hickory_resolver::system_conf::read_system_conf;
 use hickory_resolver::{Resolver, TokioResolver};
@@ -14,17 +13,11 @@ use tokio::net::lookup_host;
 
 use super::error::Error;
 
+/// Jay: no built-in public resolvers. Upstream added two fixed public DNS servers here, so a
+/// host name that the system resolver could not look up was also sent, in plain UDP, to third
+/// parties the user never chose. Only the system's own name servers are used now.
 pub fn get_default_resolver_config() -> ResolverConfig {
-    let mut default_resolve_config = ResolverConfig::new();
-    default_resolve_config.add_name_server(NameServerConfig::new(
-        "223.5.5.5:53".parse().unwrap(),
-        Protocol::Udp,
-    ));
-    default_resolve_config.add_name_server(NameServerConfig::new(
-        "180.184.1.1:53".parse().unwrap(),
-        Protocol::Udp,
-    ));
-    default_resolve_config
+    ResolverConfig::new()
 }
 
 pub static ALLOW_USE_SYSTEM_DNS_RESOLVER: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(true));
@@ -128,6 +121,11 @@ mod tests {
         let addrs = socket_addrs(&url, || Some(80)).await.unwrap();
         assert_eq!(2, addrs.len(), "addrs: {:?}", addrs);
         println!("addrs2: {:?}", addrs);
+    }
+
+    #[test]
+    fn jay_no_builtin_public_resolvers() {
+        assert!(get_default_resolver_config().name_servers().is_empty());
     }
 
     #[tokio::test]

@@ -1,0 +1,57 @@
+# cargo audit settings for Jay's EasyTier build (see JAY.md, "Security updates").
+#
+# Cargo.lock covers the whole upstream workspace (GUI, web console, FFI, uptime monitor), but Jay only
+# ships `easytier` built with `--no-default-features --features wireguard,smoltcp,tun,socks5,quic,zstd`.
+# Every advisory below was read and checked against that build with
+#   cargo tree -p easytier --no-default-features --features "$JAY_FEATURES" -e normal --target <t> -i <crate>
+# for the Windows, macOS and Linux targets. Any advisory not listed here fails the audit, and so the release.
+# Review this list whenever Cargo.lock or JAY_FEATURES changes.
+
+[advisories]
+ignore = [
+    # --- Not compiled into Jay's build (other workspace members only) ---
+    "RUSTSEC-2023-0071", # rsa: timing side channel
+    "RUSTSEC-2024-0421", # idna 0.5 (the build uses idna 1.x)
+    "RUSTSEC-2025-0004", # openssl
+    "RUSTSEC-2025-0022", # openssl
+    "RUSTSEC-2026-0463", # openssl
+    "RUSTSEC-2026-0473", # openssl
+    "RUSTSEC-2026-0474", # openssl
+    "RUSTSEC-2026-0475", # openssl
+    "RUSTSEC-2026-0476", # openssl
+    "RUSTSEC-2026-0477", # openssl
+    "RUSTSEC-2026-0478", # openssl
+    "RUSTSEC-2026-0479", # openssl
+    "RUSTSEC-2025-0132", # maxminddb
+    "RUSTSEC-2026-0235", # rkyv
+    "RUSTSEC-2026-0367", # zip
+    "RUSTSEC-2026-0368", # zip
+    "RUSTSEC-2026-0369", # zip
+    "RUSTSEC-2026-0429", # zip
+    "RUSTSEC-2026-0383", # webpki-root-certs
+    "RUSTSEC-2026-0387", # crypto-bigint
+    "RUSTSEC-2026-0459", # libsqlite3-sys
+
+    # --- In the build, reviewed, not reachable ---
+    # quick-xml: only through plist in service-manager, which reads launchd plists when installing a
+    # system service. Jay never installs EasyTier as a service.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+    # ringbuf: double free only when an element's Drop panics inside skip()/clear(). Release builds
+    # use panic = "abort", so the process ends before a second drop. Fixed in 0.5, a breaking upgrade.
+    "RUSTSEC-2026-0293",
+    # zstd-sys: WebAssembly allocator shim only.
+    "RUSTSEC-2026-0410",
+
+    # --- In the build, accepted for now ---
+    # hickory-proto 0.25: panics and memory amplification on malicious DNS answers. Fixed only in 0.26
+    # (breaking; upstream v2.7.0 is still on 0.25.2). Reached only for txt:// or srv:// peer URLs (Jay uses
+    # neither), or when a peer URL uses a host name and the system resolver fails. Jay builds no longer
+    # fall back to built-in public resolvers (easytier/src/common/dns.rs). DNSSEC (0118) and zone files (0490) are not used. Revisit on the next rebase.
+    "RUSTSEC-2026-0118",
+    "RUSTSEC-2026-0119",
+    "RUSTSEC-2026-0487",
+    "RUSTSEC-2026-0489",
+    "RUSTSEC-2026-0490",
+    "RUSTSEC-2026-0491",
+]
