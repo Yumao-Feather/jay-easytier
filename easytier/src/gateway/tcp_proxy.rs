@@ -66,20 +66,25 @@ fn loopback_source_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var(LOOPBACK_SOURCE_ENV).is_ok_and(|v| v == "1"))
 }
 
-/// The loopback address standing for a caller at virtual address `src`: 127.b.c.d for
-/// a.b.c.d. None when the caller has no usable IPv4 address, or when the result would be
-/// 127.0.0.1 (which local services treat as this machine itself).
-pub(crate) fn loopback_source_for(src: SocketAddr) -> Option<std::net::Ipv4Addr> {
-    let SocketAddr::V4(v4) = src else {
-        return None;
-    };
-    let ip = *v4.ip();
-    if ip.is_unspecified() || ip.is_loopback() {
-        return None;
+/// Jay's room network: callers inside it keep their own stand-in address.
+const ROOM_NETWORK: [u8; 2] = [10, 235];
+
+/// The one stand-in for every caller outside the room network. Local services count all of
+/// them as a single caller, never as this machine itself.
+pub(crate) const SHARED_LOOPBACK_SOURCE: std::net::Ipv4Addr =
+    std::net::Ipv4Addr::new(127, 255, 255, 254);
+
+/// The loopback address standing for a caller at virtual address `src`: 127.235.c.d for
+/// 10.235.c.d (Jay's room network), and [`SHARED_LOOPBACK_SOURCE`] for any other caller, so a
+/// caller can neither take another one's stand-in nor arrive as 127.0.0.1.
+pub(crate) fn loopback_source_for(src: SocketAddr) -> std::net::Ipv4Addr {
+    if let SocketAddr::V4(v4) = src {
+        let [a, b, c, d] = v4.ip().octets();
+        if [a, b] == ROOM_NETWORK {
+            return std::net::Ipv4Addr::new(127, b, c, d);
+        }
     }
-    let [_, b, c, d] = ip.octets();
-    let mapped = std::net::Ipv4Addr::new(127, b, c, d);
-    (mapped != std::net::Ipv4Addr::LOCALHOST).then_some(mapped)
+    SHARED_LOOPBACK_SOURCE
 }
 
 /// When the switch is on and the connection goes to a local service on loopback, binds the
@@ -96,9 +101,7 @@ fn try_bind_loopback_source(socket: &TcpSocket, src: SocketAddr, nat_dst: Socket
     if !nat_dst.ip().is_loopback() {
         return false;
     }
-    let Some(local) = loopback_source_for(src) else {
-        return false;
-    };
+    let local = loopback_source_for(src);
     match socket.bind(SocketAddr::new(local.into(), 0)) {
         Ok(()) => true,
         Err(error) => {
@@ -119,12 +122,26 @@ mod loopback_source_tests {
     #[test]
     fn maps_virtual_addresses_to_loopback() {
         let at = |s: &str| loopback_source_for(s.parse().unwrap());
-        assert_eq!(at("10.235.1.2:5000"), Some("127.235.1.2".parse().unwrap()));
-        assert_eq!(at("10.234.0.9:1"), Some("127.234.0.9".parse().unwrap()));
-        assert_eq!(at("0.0.0.0:0"), None);
-        assert_eq!(at("127.0.0.1:80"), None);
-        assert_eq!(at("10.0.0.1:80"), None);
-        assert_eq!(at("[fd00::1]:80"), None);
+        assert_eq!(
+            at("10.235.1.2:5000"),
+            "127.235.1.2".parse::<std::net::Ipv4Addr>().unwrap()
+        );
+        assert_eq!(
+            at("10.235.0.1:5000"),
+            "127.235.0.1".parse::<std::net::Ipv4Addr>().unwrap()
+        );
+        // Outside the room network: one shared stand-in, never someone else's or 127.0.0.1.
+        for other in [
+            "11.235.1.2:5000",
+            "10.234.0.9:1",
+            "10.0.0.1:80",
+            "11.0.0.1:80",
+            "0.0.0.0:0",
+            "127.0.0.1:80",
+            "[fd00::1]:80",
+        ] {
+            assert_eq!(at(other), SHARED_LOOPBACK_SOURCE, "{other}");
+        }
     }
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]

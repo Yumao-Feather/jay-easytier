@@ -35,9 +35,10 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
    `easytier/src/common/global_ctx.rs`)
 8. **Callers told apart on loopback (opt-in).** Without a TUN device, EasyTier hands a connection
    for its own virtual address to the local service on `127.0.0.1`. With `JAY_ET_LOOPBACK_SOURCE=1`
-   in the environment, the connection comes from `127.b.c.d` for a caller at virtual address
-   `a.b.c.d`, so the service can apply per-caller limits. Off by default. Where only `127.0.0.1`
-   exists (macOS), the bind fails and the connection goes out as before.
+   in the environment, the connection comes from `127.235.c.d` for a caller at `10.235.c.d` (Jay's
+   room network), and from the one shared address `127.255.255.254` for any other caller, so the
+   service can apply per-caller limits and no remote caller arrives as `127.0.0.1`. Off by default.
+   Where only `127.0.0.1` exists (macOS), the bind fails and the connection goes out as before.
    (`easytier/src/gateway/tcp_proxy.rs`, `quic_proxy.rs`, `kcp_proxy.rs`)
 9. **Build hygiene** (`.github/workflows/jay-build.yml`):
    - The build runs with `--locked`, and `cargo audit` runs on every build. Any advisory not reviewed
