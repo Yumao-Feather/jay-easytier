@@ -9,6 +9,9 @@ on:
   push:
     branches: ["jay/**"]
     tags: ["jay-v*"]
+  # Pull requests into a Jay branch get the same tests and builds (never a release: that needs a tag).
+  pull_request:
+    branches: ["jay/**"]
   workflow_dispatch:
 
 permissions:
@@ -59,6 +62,19 @@ jobs:
             rpc_service::api::jay_rpc_portal_tests peers::encrypt common::dns::tests::jay \
             peers::peer_rpc_service::tests::jay connector::tests::jay \
             gateway::tcp_proxy::loopback_source_tests
+
+      # A filter that matches nothing still passes, so check the loopback-source tests are there.
+      - name: Jay patch tests were found
+        run: |
+          set -o pipefail
+          count=$(cargo test --locked -p easytier --no-default-features --features "$JAY_FEATURES" --lib -- \
+            gateway::tcp_proxy::loopback_source_tests --list 2>/dev/null | grep -c ': test$')
+          echo "loopback_source_tests: $count"
+          test "$count" -ge 8
+
+      # Jay's builds leave KCP out, but the patch touches kcp_proxy.rs too: keep it compiling.
+      - name: KCP still compiles with the patch
+        run: cargo check --locked -p easytier --no-default-features --features "$JAY_FEATURES,kcp" --lib
 
       # Fails the build (and so the release) on any advisory not reviewed in .cargo/audit.toml.
       # 0.21.x can't read the current advisory database, so it must be 0.22 or later.

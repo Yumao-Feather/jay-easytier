@@ -66,8 +66,8 @@ pub(crate) fn loopback_source_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var(LOOPBACK_SOURCE_ENV).is_ok_and(|v| v == "1"))
 }
 
-/// Jay's room network: callers inside it keep their own stand-in address.
-const ROOM_NETWORK: [u8; 2] = [10, 235];
+/// Jay's public network (where the room directory lives): callers inside it keep their own stand-in address.
+const PUBLIC_NETWORK: [u8; 2] = [10, 235];
 
 /// The one stand-in for every caller that doesn't get its own. Local services count all of
 /// them as a single caller, never as this machine itself.
@@ -80,14 +80,14 @@ pub(crate) const UNCONFIRMED_SOURCE: SocketAddr =
     SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
 
 /// The loopback address standing for a caller at `src`: 127.235.c.d for a confirmed caller at
-/// 10.235.c.d (Jay's room network, except its network, broadcast and directory addresses), and
+/// 10.235.c.d (Jay's public network, except its network, broadcast and directory addresses), and
 /// [`SHARED_LOOPBACK_SOURCE`] for anything else, so a caller can neither take another one's
 /// stand-in nor arrive as 127.0.0.1.
 pub(crate) fn loopback_source_for(src: SocketAddr) -> std::net::Ipv4Addr {
     if let IpAddr::V4(v4) = src.ip().to_canonical() {
         let [a, b, c, d] = v4.octets();
         let reserved = matches!((c, d), (0, 0) | (0, 1) | (255, 255));
-        if [a, b] == ROOM_NETWORK && !reserved {
+        if [a, b] == PUBLIC_NETWORK && !reserved {
             return std::net::Ipv4Addr::new(127, b, c, d);
         }
     }
@@ -158,6 +158,31 @@ pub(crate) async fn confirmed_source(
     confirm_source(claimed, declared, holders)
 }
 
+/// Does a connection need its claimed source confirmed? Only with the switch on, for a plain TCP
+/// connection (the KCP / QUIC source-side connectors pass the source on to the remote side
+/// unchanged) to a local service on loopback.
+pub(crate) fn needs_confirmation(
+    enabled: bool,
+    transport: TcpProxyEntryTransportType,
+    nat_dst: SocketAddr,
+) -> bool {
+    enabled && transport == TcpProxyEntryTransportType::Tcp && nat_dst.ip().is_loopback()
+}
+
+/// True at most once a minute per `last` (seconds since the epoch of the last true): keeps a
+/// flood of failures from flooding the log too.
+pub(crate) fn once_a_minute(last: &std::sync::atomic::AtomicU64) -> bool {
+    use std::sync::atomic::Ordering;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let prev = last.load(Ordering::Relaxed);
+    (prev == 0 || now >= prev + 60)
+        && last
+            .compare_exchange(prev, now, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+}
+
 /// When `enabled` and the connection goes to a local service on loopback, binds the socket to
 /// the caller's stand-in so the service can tell callers apart. If that bind fails the
 /// connection is refused rather than going out as 127.0.0.1 (so on macOS, which only has
@@ -175,18 +200,8 @@ fn bind_loopback_source(
     socket
         .bind(SocketAddr::new(local.into(), 0))
         .inspect_err(|error| {
-            // At most one warning a minute: a flood of failures shouldn't flood the log too.
-            use std::sync::atomic::{AtomicU64, Ordering};
-            static LAST: AtomicU64 = AtomicU64::new(0);
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs());
-            let last = LAST.load(Ordering::Relaxed);
-            if now >= last + 60
-                && LAST
-                    .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
-                    .is_ok()
-            {
+            static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            if once_a_minute(&LAST) {
                 tracing::warn!(
                     ?error,
                     ?local,
@@ -205,7 +220,7 @@ mod loopback_source_tests {
     }
 
     #[test]
-    fn maps_room_network_callers_to_their_own_stand_in() {
+    fn maps_public_network_callers_to_their_own_stand_in() {
         let at = |s: &str| loopback_source_for(s.parse().unwrap());
         assert_eq!(at("10.235.1.2:5000"), v4("127.235.1.2"));
         assert_eq!(at("10.235.255.254:5000"), v4("127.235.255.254"));
@@ -257,6 +272,28 @@ mod loopback_source_tests {
             confirm_source("[fd00::1]:4000".parse().unwrap(), Some(v4("10.235.4.7")), 1),
             UNCONFIRMED_SOURCE
         );
+    }
+
+    #[test]
+    fn only_plain_tcp_to_a_local_service_is_confirmed() {
+        use TcpProxyEntryTransportType as T;
+        let local: SocketAddr = "127.0.0.1:47668".parse().unwrap();
+        let local6: SocketAddr = "[::1]:47668".parse().unwrap();
+        let remote: SocketAddr = "10.235.4.8:47668".parse().unwrap();
+        assert!(needs_confirmation(true, T::Tcp, local));
+        assert!(needs_confirmation(true, T::Tcp, local6));
+        assert!(!needs_confirmation(false, T::Tcp, local));
+        assert!(!needs_confirmation(true, T::Tcp, remote));
+        assert!(!needs_confirmation(true, T::Kcp, local));
+        assert!(!needs_confirmation(true, T::Quic, local));
+    }
+
+    #[test]
+    fn once_a_minute_lets_one_through() {
+        let last = std::sync::atomic::AtomicU64::new(0);
+        assert!(once_a_minute(&last));
+        assert!(!once_a_minute(&last));
+        assert!(!once_a_minute(&last));
     }
 
     #[test]
@@ -1067,12 +1104,12 @@ impl<C: NatDstConnector> TcpProxy<C> {
             )
             .inc();
 
-        // Jay: only a plain TCP connection to a local service gets a confirmed stand-in; the
-        // KCP / QUIC source-side connectors pass the source on to the remote side unchanged.
-        let src = if loopback_source_enabled()
-            && connector.transport_type() == TcpProxyEntryTransportType::Tcp
-            && nat_dst.ip().is_loopback()
-        {
+        // Jay: only a plain TCP connection to a local service gets a confirmed stand-in.
+        let src = if needs_confirmation(
+            loopback_source_enabled(),
+            connector.transport_type(),
+            nat_dst,
+        ) {
             match peer_mgr.upgrade() {
                 Some(peer_manager) => {
                     let route = peer_manager.get_route();
@@ -1087,7 +1124,14 @@ impl<C: NatDstConnector> TcpProxy<C> {
 
         let _guard = global_ctx.net_ns.guard();
         let Ok(dst_tcp_stream) = connector.connect(src, nat_dst).await else {
-            tracing::error!("connect to dst failed: {:?}", nat_entry);
+            // Jay: at most one error a minute (a refused stand-in bind or a closed port can be
+            // triggered by any caller); the rest at debug.
+            static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            if once_a_minute(&LAST) {
+                tracing::error!("connect to dst failed: {:?}", nat_entry);
+            } else {
+                tracing::debug!("connect to dst failed: {:?}", nat_entry);
+            }
             nat_entry.state.store(NatDstEntryState::Closed);
             Self::remove_entry_from_all_conn_map(conn_map, addr_conn_map, nat_entry);
             return;

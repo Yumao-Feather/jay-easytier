@@ -37,19 +37,22 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
    for its own virtual address to the local service on `127.0.0.1`. With `JAY_ET_LOOPBACK_SOURCE`
    set to exactly `1`, TCP connections handed to a local service on loopback are bound to a
    stand-in for the caller instead:
-   - `127.235.c.d` for a caller at `10.235.c.d` (Jay's room network), but only when that is the
+   - `127.235.c.d` for a caller at `10.235.c.d` (Jay's public network, where the room directory
+     lives), but only when that is the
      address the sending peer declares in the route table and no other peer, this node included,
      declares it (TCP and QUIC proxy paths);
    - the one shared address `127.255.255.254` for everything else: unconfirmed or shared
-     addresses, the room network's `.0.0`, `.0.1` and `.255.255`, addresses outside it, and every
+     addresses, the public network's `.0.0`, `.0.1` and `.255.255`, addresses outside it, and every
      KCP-proxied stream (Jay's builds don't include KCP).
    No remote TCP caller arrives as `127.0.0.1`. If the bind fails, the connection is refused rather
    than going out unbound, so leave the switch off where only `127.0.0.1` exists (macOS).
    Limits of the check: the sending peer id comes from the packet header, which isn't checked
    against the connection a relayed packet came over, so a peer that forwards traffic between a
-   caller and this node could forge it; and an address whose real holder briefly drops out of the
-   route table can be taken over for that time. The stand-in tells callers apart for rate limits;
-   it is not an identity. UDP is unchanged. The room network (`10.235.0.0/16`) is fixed here and
+   caller and this node could forge it; route entries aren't signed by the peer they describe, so
+   an address whose real holder briefly drops out of the route table, or is pushed out of it, can
+   be taken over for that time; and a peer that has just joined shares the one address until its
+   route arrives. The stand-in tells callers apart for rate limits;
+   it is not an identity. UDP is unchanged. The public network (`10.235.0.0/16`) is fixed here and
    must match Jay's `PublicNetworkProfile.Subnet`. Off by default.
    (`easytier/src/gateway/tcp_proxy.rs`, `quic_proxy.rs`, `kcp_proxy.rs`)
 9. **Build hygiene** (`.github/workflows/jay-build.yml`):
