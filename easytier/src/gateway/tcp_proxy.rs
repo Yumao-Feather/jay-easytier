@@ -57,6 +57,104 @@ pub(crate) trait NatDstConnector: Send + Sync + Clone + 'static {
     fn transport_type(&self) -> TcpProxyEntryTransportType;
 }
 
+/// Jay: environment switch that makes connections handed to a local service carry the
+/// caller's virtual address. Off unless set to "1".
+pub(crate) const LOOPBACK_SOURCE_ENV: &str = "JAY_ET_LOOPBACK_SOURCE";
+
+fn loopback_source_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var(LOOPBACK_SOURCE_ENV).is_ok_and(|v| v == "1"))
+}
+
+/// The loopback address standing for a caller at virtual address `src`: 127.b.c.d for
+/// a.b.c.d. None when the caller has no usable IPv4 address, or when the result would be
+/// 127.0.0.1 (which local services treat as this machine itself).
+pub(crate) fn loopback_source_for(src: SocketAddr) -> Option<std::net::Ipv4Addr> {
+    let SocketAddr::V4(v4) = src else {
+        return None;
+    };
+    let ip = *v4.ip();
+    if ip.is_unspecified() || ip.is_loopback() {
+        return None;
+    }
+    let [_, b, c, d] = ip.octets();
+    let mapped = std::net::Ipv4Addr::new(127, b, c, d);
+    (mapped != std::net::Ipv4Addr::LOCALHOST).then_some(mapped)
+}
+
+/// When the switch is on and the connection goes to a local service on loopback, binds the
+/// socket to the caller's loopback stand-in so the service can tell callers apart. Platforms
+/// that only have 127.0.0.1 (macOS) fail the bind; the connection then goes out unbound.
+fn bind_loopback_source(socket: &TcpSocket, src: SocketAddr, nat_dst: SocketAddr) {
+    if loopback_source_enabled() {
+        try_bind_loopback_source(socket, src, nat_dst);
+    }
+}
+
+/// Binds to the caller's loopback stand-in when `nat_dst` is on loopback. Returns whether it did.
+fn try_bind_loopback_source(socket: &TcpSocket, src: SocketAddr, nat_dst: SocketAddr) -> bool {
+    if !nat_dst.ip().is_loopback() {
+        return false;
+    }
+    let Some(local) = loopback_source_for(src) else {
+        return false;
+    };
+    match socket.bind(SocketAddr::new(local.into(), 0)) {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::debug!(
+                ?error,
+                ?local,
+                "bind loopback source failed, connecting unbound"
+            );
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod loopback_source_tests {
+    use super::*;
+
+    #[test]
+    fn maps_virtual_addresses_to_loopback() {
+        let at = |s: &str| loopback_source_for(s.parse().unwrap());
+        assert_eq!(at("10.235.1.2:5000"), Some("127.235.1.2".parse().unwrap()));
+        assert_eq!(at("10.234.0.9:1"), Some("127.234.0.9".parse().unwrap()));
+        assert_eq!(at("0.0.0.0:0"), None);
+        assert_eq!(at("127.0.0.1:80"), None);
+        assert_eq!(at("10.0.0.1:80"), None);
+        assert_eq!(at("[fd00::1]:80"), None);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[tokio::test]
+    async fn local_service_sees_the_callers_stand_in() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dst = listener.local_addr().unwrap();
+        let socket = TcpSocket::new_v4().unwrap();
+        assert!(try_bind_loopback_source(
+            &socket,
+            "10.235.7.8:4000".parse().unwrap(),
+            dst
+        ));
+        let _stream = socket.connect(dst).await.unwrap();
+        let (_, peer) = listener.accept().await.unwrap();
+        assert_eq!(
+            peer.ip(),
+            "127.235.7.8".parse::<std::net::IpAddr>().unwrap()
+        );
+
+        // Not for connections going elsewhere.
+        let other = TcpSocket::new_v4().unwrap();
+        assert!(!try_bind_loopback_source(
+            &other,
+            "10.235.7.8:4000".parse().unwrap(),
+            "10.235.0.1:80".parse().unwrap()
+        ));
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NatDstTcpConnector;
 
@@ -65,11 +163,12 @@ impl NatDstConnector for NatDstTcpConnector {
     type DstStream = TcpStream;
     async fn connect(
         &self,
-        _src: SocketAddr,
+        src: SocketAddr,
         nat_dst: SocketAddr,
     ) -> anyhow::Result<Self::DstStream> {
         let socket = TcpSocket::new_v4()
             .inspect_err(|error| log::error!(?error, "create v4 socket failed"))?;
+        bind_loopback_source(&socket, src, nat_dst);
 
         let stream = timeout(Duration::from_secs(10), socket.connect(nat_dst))
             .await?
