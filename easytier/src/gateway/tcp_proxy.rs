@@ -132,10 +132,10 @@ mod loopback_source_tests {
         );
         // Outside the room network: one shared stand-in, never someone else's or 127.0.0.1.
         for other in [
-            "11.235.1.2:5000",
+            "172.16.235.2:5000",
             "10.234.0.9:1",
             "10.0.0.1:80",
-            "11.0.0.1:80",
+            "100.64.0.1:80",
             "0.0.0.0:0",
             "127.0.0.1:80",
             "[fd00::1]:80",
