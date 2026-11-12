@@ -13,9 +13,18 @@ use crate::{
 };
 use anyhow::Context;
 use dashmap::DashSet;
-use hickory_resolver::proto::rr::rdata::SRV;
+use hickory_resolver::proto::rr::{RData, Record, rdata::SRV};
 use rand::{Rng as _, seq::SliceRandom};
 use strum::VariantArray;
+
+/// The SRV records among `answers`. Since hickory 0.26 a lookup returns every answer record (a
+/// CNAME chain can come first), so pick the SRV records out by type.
+fn srv_records(answers: &[Record]) -> impl Iterator<Item = &SRV> {
+    answers.iter().filter_map(|r| match &r.data {
+        RData::SRV(srv) => Some(srv),
+        _ => None,
+    })
+}
 
 fn weighted_choice<T>(options: &[(T, u64)]) -> Option<&T> {
     let total_weight = options.iter().map(|(_, weight)| *weight).sum();
@@ -85,12 +94,12 @@ impl DnsTunnelConnector {
 
     fn handle_one_srv_record(record: &SRV, protocol: IpScheme) -> Result<(url::Url, u64), Error> {
         // port must be non-zero
-        if record.port() == 0 {
+        if record.port == 0 {
             return Err(anyhow::anyhow!("port must be non-zero").into());
         }
 
-        let connector_dst = record.target().to_utf8();
-        let dst_url = format!("{}://{}:{}", protocol, connector_dst, record.port());
+        let connector_dst = record.target.to_utf8();
+        let dst_url = format!("{}://{}:{}", protocol, connector_dst, record.port);
 
         Ok((
             dst_url.parse().with_context(|| {
@@ -98,11 +107,11 @@ impl DnsTunnelConnector {
                     "parse dst_url failed, protocol: {}, connector_dst: {}, port: {}, dst_url: {}",
                     protocol,
                     connector_dst,
-                    record.port(),
+                    record.port,
                     dst_url
                 )
             })?,
-            record.priority() as _,
+            record.priority as _,
         ))
     }
 
@@ -129,7 +138,7 @@ impl DnsTunnelConnector {
                         format!("srv_lookup failed, srv_domain: {}", srv_domain)
                     })?;
                     tracing::info!(?response, ?srv_domain, "srv_lookup response");
-                    for record in response.iter() {
+                    for record in srv_records(response.answers()) {
                         let parsed_record = Self::handle_one_srv_record(record, **protocol);
                         tracing::info!(?parsed_record, ?srv_domain, "parsed_record");
                         if let Err(e) = &parsed_record {
@@ -219,6 +228,23 @@ impl super::TunnelConnector for DnsTunnelConnector {
 mod tests {
     use super::*;
     use crate::common::global_ctx::tests::get_mock_global_ctx;
+
+    #[test]
+    fn jay_srv_answers_skip_other_records() {
+        use hickory_resolver::proto::rr::{Name, rdata::CNAME};
+        let name = Name::from_ascii("_easytier._tcp.example.").unwrap();
+        let target = Name::from_ascii("node.example.").unwrap();
+        let answers = vec![
+            Record::from_rdata(name.clone(), 60, RData::CNAME(CNAME(target.clone()))),
+            Record::from_rdata(name, 60, RData::SRV(SRV::new(10, 5, 11010, target))),
+        ];
+        let found: Vec<_> = srv_records(&answers).collect();
+        assert_eq!(found.len(), 1);
+        let (url, priority) =
+            DnsTunnelConnector::handle_one_srv_record(found[0], IpScheme::Tcp).unwrap();
+        assert_eq!(url.as_str(), "tcp://node.example.:11010");
+        assert_eq!(priority, 10);
+    }
 
     #[tokio::test]
     async fn test_txt() {

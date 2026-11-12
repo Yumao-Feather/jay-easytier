@@ -60,17 +60,26 @@ jobs:
         run: |
           cargo test --locked -p easytier --no-default-features --features "$JAY_FEATURES" --lib -- \
             rpc_service::api::jay_rpc_portal_tests peers::encrypt common::dns::tests::jay \
-            peers::peer_rpc_service::tests::jay connector::tests::jay \
+            peers::peer_rpc_service::tests::jay connector::tests::jay connector::dns_connector::tests::jay \
             gateway::tcp_proxy::loopback_source_tests
 
-      # A filter that matches nothing still passes, so check the loopback-source tests are there.
+      # A filter that matches nothing still passes, so check every filter above finds its tests.
+      # This job runs on Linux only, where all 8 loopback-source tests exist (one is Linux/Windows only).
       - name: Jay patch tests were found
         run: |
           set -o pipefail
-          count=$(cargo test --locked -p easytier --no-default-features --features "$JAY_FEATURES" --lib -- \
-            gateway::tcp_proxy::loopback_source_tests --list 2>/dev/null | grep -c ': test$')
-          echo "loopback_source_tests: $count"
-          test "$count" -ge 8
+          count() {
+            cargo test --locked -p easytier --no-default-features --features "$JAY_FEATURES" --lib -- "$1" --list 2>/dev/null | grep -c ': test$' || true
+          }
+          ok=1
+          for filter in rpc_service::api::jay_rpc_portal_tests peers::encrypt common::dns::tests::jay \
+              peers::peer_rpc_service::tests::jay connector::tests::jay connector::dns_connector::tests::jay; do
+            n=$(count "$filter"); echo "$filter: $n"
+            [ "$n" -ge 1 ] || ok=0
+          done
+          n=$(count gateway::tcp_proxy::loopback_source_tests); echo "gateway::tcp_proxy::loopback_source_tests: $n"
+          [ "$n" -ge 8 ] || ok=0
+          [ "$ok" = 1 ]
 
       # Jay's builds leave KCP out, but the patch touches kcp_proxy.rs too: keep it compiling.
       - name: KCP still compiles with the patch

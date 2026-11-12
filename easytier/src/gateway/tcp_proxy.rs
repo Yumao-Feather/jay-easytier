@@ -169,13 +169,16 @@ pub(crate) fn needs_confirmation(
     enabled && transport == TcpProxyEntryTransportType::Tcp && nat_dst.ip().is_loopback()
 }
 
-/// True at most once a minute per `last` (seconds since the epoch of the last true): keeps a
-/// flood of failures from flooding the log too.
+/// True at most once a minute per `last` (seconds on a monotonic clock, from 1, of the last
+/// true): keeps a flood of failures from flooding the log too. A clock set back can't silence it.
 pub(crate) fn once_a_minute(last: &std::sync::atomic::AtomicU64) -> bool {
     use std::sync::atomic::Ordering;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let now = START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs()
+        + 1;
     let prev = last.load(Ordering::Relaxed);
     (prev == 0 || now >= prev + 60)
         && last
@@ -1124,10 +1127,10 @@ impl<C: NatDstConnector> TcpProxy<C> {
 
         let _guard = global_ctx.net_ns.guard();
         let Ok(dst_tcp_stream) = connector.connect(src, nat_dst).await else {
-            // Jay: at most one error a minute (a refused stand-in bind or a closed port can be
-            // triggered by any caller); the rest at debug.
+            // Jay: with the switch on, at most one error a minute (a refused stand-in bind or a
+            // closed port can be triggered by any caller), the rest at debug. Off: as upstream.
             static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-            if once_a_minute(&LAST) {
+            if !loopback_source_enabled() || once_a_minute(&LAST) {
                 tracing::error!("connect to dst failed: {:?}", nat_entry);
             } else {
                 tracing::debug!("connect to dst failed: {:?}", nat_entry);
