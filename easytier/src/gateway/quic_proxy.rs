@@ -612,6 +612,9 @@ impl QuicStreamReceiver {
                     };
 
                     let ctx = self.ctx.clone();
+                    // Jay: the peer that opened this connection (its address carries the
+                    // authenticated sender's peer id), to confirm the source it claims.
+                    let from_peer = QuicAddr::try_from(addr).ok().map(|a| a.peer_id);
                     self.tasks.spawn(async move {
                         let mut tasks = JoinSet::new();
                         loop {
@@ -634,7 +637,7 @@ impl QuicStreamReceiver {
 
                                     let ctx = ctx.clone();
                                     tasks.spawn(async move {
-                                        match Self::establish_stream(stream, ctx).await {
+                                        match Self::establish_stream(stream, ctx, from_peer).await {
                                             Ok(transfer_fut) => {
                                                 if let Err(e) = transfer_fut.await {
                                                     warn!("quic stream transfer error: {:?}", e);
@@ -690,6 +693,7 @@ impl QuicStreamReceiver {
     async fn establish_stream(
         mut stream: QuicStream,
         ctx: Arc<QuicStreamContext>,
+        from_peer: Option<PeerId>,
     ) -> Result<impl Future<Output = crate::common::error::Result<()>>, Error> {
         let conn_data = Self::read_stream_header(&mut stream).await?;
         let conn_data_parsed = QuicConnData::decode(conn_data.as_ref())
@@ -776,12 +780,13 @@ impl QuicStreamReceiver {
 
         let _g = global_ctx.net_ns.guard();
         let connector = crate::gateway::tcp_proxy::NatDstTcpConnector {};
-        let ret = connector
-            .connect(
-                SocketAddr::new(src_ip.into(), src_socket.port()),
-                dst_socket,
-            )
-            .await?;
+        let src = crate::gateway::tcp_proxy::confirmed_source(
+            route.as_ref(),
+            from_peer,
+            SocketAddr::new(src_ip, src_socket.port()),
+        )
+        .await;
+        let ret = connector.connect(src, dst_socket).await?;
 
         if let Some(mut e) = proxy_entries.get_mut(&handle) {
             e.state = TcpProxyEntryState::Connected.into();

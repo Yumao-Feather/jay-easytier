@@ -57,11 +57,11 @@ pub(crate) trait NatDstConnector: Send + Sync + Clone + 'static {
     fn transport_type(&self) -> TcpProxyEntryTransportType;
 }
 
-/// Jay: environment switch that makes connections handed to a local service carry the
-/// caller's virtual address. Off unless set to "1".
+/// Jay: environment switch that makes connections handed to a local service carry a stand-in
+/// for the caller. Off unless set to exactly "1".
 pub(crate) const LOOPBACK_SOURCE_ENV: &str = "JAY_ET_LOOPBACK_SOURCE";
 
-fn loopback_source_enabled() -> bool {
+pub(crate) fn loopback_source_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var(LOOPBACK_SOURCE_ENV).is_ok_and(|v| v == "1"))
 }
@@ -69,69 +69,127 @@ fn loopback_source_enabled() -> bool {
 /// Jay's room network: callers inside it keep their own stand-in address.
 const ROOM_NETWORK: [u8; 2] = [10, 235];
 
-/// The one stand-in for every caller outside the room network. Local services count all of
+/// The one stand-in for every caller that doesn't get its own. Local services count all of
 /// them as a single caller, never as this machine itself.
 pub(crate) const SHARED_LOOPBACK_SOURCE: std::net::Ipv4Addr =
     std::net::Ipv4Addr::new(127, 255, 255, 254);
 
-/// The loopback address standing for a caller at virtual address `src`: 127.235.c.d for
-/// 10.235.c.d (Jay's room network), and [`SHARED_LOOPBACK_SOURCE`] for any other caller, so a
-/// caller can neither take another one's stand-in nor arrive as 127.0.0.1.
+/// The source to use for a caller whose address could not be confirmed: it maps to
+/// [`SHARED_LOOPBACK_SOURCE`].
+pub(crate) const UNCONFIRMED_SOURCE: SocketAddr =
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
+
+/// The loopback address standing for a caller at `src`: 127.235.c.d for a confirmed caller at
+/// 10.235.c.d (Jay's room network, except its network, broadcast and directory addresses), and
+/// [`SHARED_LOOPBACK_SOURCE`] for anything else, so a caller can neither take another one's
+/// stand-in nor arrive as 127.0.0.1.
 pub(crate) fn loopback_source_for(src: SocketAddr) -> std::net::Ipv4Addr {
-    if let SocketAddr::V4(v4) = src {
-        let [a, b, c, d] = v4.ip().octets();
-        if [a, b] == ROOM_NETWORK {
+    if let IpAddr::V4(v4) = src.ip().to_canonical() {
+        let [a, b, c, d] = v4.octets();
+        let reserved = matches!((c, d), (0, 0) | (0, 1) | (255, 255));
+        if [a, b] == ROOM_NETWORK && !reserved {
             return std::net::Ipv4Addr::new(127, b, c, d);
         }
     }
     SHARED_LOOPBACK_SOURCE
 }
 
-/// When the switch is on and the connection goes to a local service on loopback, binds the
-/// socket to the caller's loopback stand-in so the service can tell callers apart. Platforms
-/// that only have 127.0.0.1 (macOS) fail the bind; the connection then goes out unbound.
-fn bind_loopback_source(socket: &TcpSocket, src: SocketAddr, nat_dst: SocketAddr) {
-    if loopback_source_enabled() {
-        try_bind_loopback_source(socket, src, nat_dst);
+/// The caller's source if it is the address its authenticated peer was assigned and no other
+/// peer claims it too; [`UNCONFIRMED_SOURCE`] otherwise. `assigned` is the peer's own address
+/// from the route table, `holders` how many peers there claim `claimed`'s address.
+pub(crate) fn confirm_source(
+    claimed: SocketAddr,
+    assigned: Option<std::net::Ipv4Addr>,
+    holders: usize,
+) -> SocketAddr {
+    match claimed.ip().to_canonical() {
+        IpAddr::V4(ip) if assigned == Some(ip) && holders == 1 => {
+            SocketAddr::new(IpAddr::V4(ip), claimed.port())
+        }
+        _ => UNCONFIRMED_SOURCE,
     }
 }
 
-/// Binds to the caller's loopback stand-in when `nat_dst` is on loopback. Returns whether it did.
-fn try_bind_loopback_source(socket: &TcpSocket, src: SocketAddr, nat_dst: SocketAddr) -> bool {
-    if !nat_dst.ip().is_loopback() {
-        return false;
+/// [`confirm_source`] against the route table, for a stream that `from_peer` (the
+/// authenticated sender) opened claiming `claimed`. With the switch off, `claimed` is
+/// returned unchanged.
+pub(crate) async fn confirmed_source(
+    route: &(dyn crate::peers::route_trait::Route + Send + Sync),
+    from_peer: Option<crate::common::PeerId>,
+    claimed: SocketAddr,
+) -> SocketAddr {
+    if !loopback_source_enabled() {
+        return claimed;
+    }
+    let Some(from_peer) = from_peer else {
+        return UNCONFIRMED_SOURCE;
+    };
+    let IpAddr::V4(ip) = claimed.ip().to_canonical() else {
+        return UNCONFIRMED_SOURCE;
+    };
+    let assigned = route
+        .get_peer_info(from_peer)
+        .await
+        .and_then(|info| info.ipv4_addr)
+        .map(std::net::Ipv4Addr::from);
+    let holders = route
+        .list_routes()
+        .await
+        .iter()
+        .filter(|r| {
+            r.ipv4_addr
+                .and_then(|inet| inet.address)
+                .map(std::net::Ipv4Addr::from)
+                == Some(ip)
+        })
+        .count();
+    confirm_source(claimed, assigned, holders)
+}
+
+/// When `enabled` and the connection goes to a local service on loopback, binds the socket to
+/// the caller's stand-in so the service can tell callers apart. If that bind fails the
+/// connection is refused rather than going out as 127.0.0.1 (so on macOS, which only has
+/// 127.0.0.1, the switch must stay off).
+fn bind_loopback_source(
+    enabled: bool,
+    socket: &TcpSocket,
+    src: SocketAddr,
+    nat_dst: SocketAddr,
+) -> std::io::Result<()> {
+    if !enabled || !nat_dst.ip().is_loopback() {
+        return Ok(());
     }
     let local = loopback_source_for(src);
-    match socket.bind(SocketAddr::new(local.into(), 0)) {
-        Ok(()) => true,
-        Err(error) => {
-            tracing::debug!(
+    socket
+        .bind(SocketAddr::new(local.into(), 0))
+        .inspect_err(|error| {
+            tracing::warn!(
                 ?error,
                 ?local,
-                "bind loopback source failed, connecting unbound"
-            );
-            false
-        }
-    }
+                "bind loopback source failed, refusing the connection"
+            )
+        })
 }
 
 #[cfg(test)]
 mod loopback_source_tests {
     use super::*;
 
+    fn v4(s: &str) -> std::net::Ipv4Addr {
+        s.parse().unwrap()
+    }
+
     #[test]
-    fn maps_virtual_addresses_to_loopback() {
+    fn maps_room_network_callers_to_their_own_stand_in() {
         let at = |s: &str| loopback_source_for(s.parse().unwrap());
-        assert_eq!(
-            at("10.235.1.2:5000"),
-            "127.235.1.2".parse::<std::net::Ipv4Addr>().unwrap()
-        );
-        assert_eq!(
-            at("10.235.0.1:5000"),
-            "127.235.0.1".parse::<std::net::Ipv4Addr>().unwrap()
-        );
-        // Outside the room network: one shared stand-in, never someone else's or 127.0.0.1.
+        assert_eq!(at("10.235.1.2:5000"), v4("127.235.1.2"));
+        assert_eq!(at("10.235.255.254:5000"), v4("127.235.255.254"));
+        assert_eq!(at("[::ffff:10.235.1.2]:5000"), v4("127.235.1.2"));
+        // Everything else: one shared stand-in, never someone else's or 127.0.0.1.
         for other in [
+            "10.235.0.0:1",
+            "10.235.0.1:1",
+            "10.235.255.255:1",
             "172.16.235.2:5000",
             "10.234.0.9:1",
             "10.0.0.1:80",
@@ -142,6 +200,38 @@ mod loopback_source_tests {
         ] {
             assert_eq!(at(other), SHARED_LOOPBACK_SOURCE, "{other}");
         }
+        assert_eq!(
+            loopback_source_for(UNCONFIRMED_SOURCE),
+            SHARED_LOOPBACK_SOURCE
+        );
+    }
+
+    #[test]
+    fn only_a_peers_own_unshared_address_is_confirmed() {
+        let claimed: SocketAddr = "10.235.4.7:4000".parse().unwrap();
+        assert_eq!(confirm_source(claimed, Some(v4("10.235.4.7")), 1), claimed);
+        assert_eq!(
+            confirm_source(
+                "[::ffff:10.235.4.7]:4000".parse().unwrap(),
+                Some(v4("10.235.4.7")),
+                1
+            ),
+            claimed
+        );
+        // Another peer's address, no address, or an address two peers claim: not confirmed.
+        assert_eq!(
+            confirm_source(claimed, Some(v4("10.235.4.8")), 1),
+            UNCONFIRMED_SOURCE
+        );
+        assert_eq!(confirm_source(claimed, None, 1), UNCONFIRMED_SOURCE);
+        assert_eq!(
+            confirm_source(claimed, Some(v4("10.235.4.7")), 2),
+            UNCONFIRMED_SOURCE
+        );
+        assert_eq!(
+            confirm_source("[fd00::1]:4000".parse().unwrap(), Some(v4("10.235.4.7")), 1),
+            UNCONFIRMED_SOURCE
+        );
     }
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -149,26 +239,42 @@ mod loopback_source_tests {
     async fn local_service_sees_the_callers_stand_in() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let dst = listener.local_addr().unwrap();
-        let socket = TcpSocket::new_v4().unwrap();
-        assert!(try_bind_loopback_source(
-            &socket,
-            "10.235.7.8:4000".parse().unwrap(),
-            dst
-        ));
-        let _stream = socket.connect(dst).await.unwrap();
-        let (_, peer) = listener.accept().await.unwrap();
+        let peer_of = |src: SocketAddr| {
+            let listener = &listener;
+            async move {
+                let socket = TcpSocket::new_v4().unwrap();
+                bind_loopback_source(true, &socket, src, dst).unwrap();
+                let _stream = socket.connect(dst).await.unwrap();
+                listener.accept().await.unwrap().1.ip()
+            }
+        };
         assert_eq!(
-            peer.ip(),
-            "127.235.7.8".parse::<std::net::IpAddr>().unwrap()
+            peer_of("10.235.7.8:4000".parse().unwrap()).await,
+            v4("127.235.7.8")
         );
+        assert_eq!(peer_of(UNCONFIRMED_SOURCE).await, SHARED_LOOPBACK_SOURCE);
+    }
 
-        // Not for connections going elsewhere.
-        let other = TcpSocket::new_v4().unwrap();
-        assert!(!try_bind_loopback_source(
-            &other,
-            "10.235.7.8:4000".parse().unwrap(),
-            "10.235.0.1:80".parse().unwrap()
-        ));
+    #[tokio::test]
+    async fn binds_only_when_on_and_going_to_loopback() {
+        let src: SocketAddr = "10.235.7.8:4000".parse().unwrap();
+        // Off: never bound.
+        let socket = TcpSocket::new_v4().unwrap();
+        bind_loopback_source(false, &socket, src, "127.0.0.1:80".parse().unwrap()).unwrap();
+        assert!(socket.local_addr().is_err() || socket.local_addr().unwrap().ip().is_unspecified());
+        // On, but going elsewhere: never bound.
+        let socket = TcpSocket::new_v4().unwrap();
+        bind_loopback_source(true, &socket, src, "10.235.0.1:80".parse().unwrap()).unwrap();
+        assert!(socket.local_addr().is_err() || socket.local_addr().unwrap().ip().is_unspecified());
+    }
+
+    #[tokio::test]
+    async fn a_failed_bind_refuses_the_connection() {
+        // A socket that is already bound can't be bound again: stands in for any bind failure.
+        let socket = TcpSocket::new_v4().unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let src: SocketAddr = "10.235.9.11:1".parse().unwrap();
+        assert!(bind_loopback_source(true, &socket, src, "127.0.0.1:80".parse().unwrap()).is_err());
     }
 }
 
@@ -185,7 +291,7 @@ impl NatDstConnector for NatDstTcpConnector {
     ) -> anyhow::Result<Self::DstStream> {
         let socket = TcpSocket::new_v4()
             .inspect_err(|error| log::error!(?error, "create v4 socket failed"))?;
-        bind_loopback_source(&socket, src, nat_dst);
+        bind_loopback_source(loopback_source_enabled(), &socket, src, nat_dst)?;
 
         let stream = timeout(Duration::from_secs(10), socket.connect(nat_dst))
             .await?
@@ -232,6 +338,9 @@ type NatDstEntryState = TcpProxyEntryState;
 pub struct NatDstEntry {
     id: uuid::Uuid,
     src: SocketAddr,
+    /// Jay: the source to hand to the local service (see [`confirmed_source`]); `src` unless the
+    /// loopback-source switch is on.
+    connect_src: AtomicCell<SocketAddr>,
     real_dst: SocketAddr,
     mapped_dst: SocketAddr,
     start_time: Instant,
@@ -245,6 +354,7 @@ impl NatDstEntry {
         Self {
             id: uuid::Uuid::new_v4(),
             src,
+            connect_src: AtomicCell::new(src),
             real_dst,
             mapped_dst,
             start_time: Instant::now(),
@@ -902,7 +1012,10 @@ impl<C: NatDstConnector> TcpProxy<C> {
             .inc();
 
         let _guard = global_ctx.net_ns.guard();
-        let Ok(dst_tcp_stream) = connector.connect(nat_entry.src, nat_dst).await else {
+        let Ok(dst_tcp_stream) = connector
+            .connect(nat_entry.connect_src.load(), nat_dst)
+            .await
+        else {
             tracing::error!("connect to dst failed: {:?}", nat_entry);
             nat_entry.state.store(NatDstEntryState::Closed);
             Self::remove_entry_from_all_conn_map(conn_map, addr_conn_map, nat_entry);
@@ -1026,6 +1139,8 @@ impl<C: NatDstConnector> TcpProxy<C> {
         };
         let mut real_dst_ip = origin_ip;
         let hdr = packet.mut_peer_manager_header().unwrap();
+        // Jay: the authenticated sender, to confirm the source address it claims.
+        let from_peer = hdr.from_peer_id.get();
 
         if !self.connector.check_packet_from_peer(
             &self.cidr_set,
@@ -1058,9 +1173,18 @@ impl<C: NatDstConnector> TcpProxy<C> {
             let mapped_dst = SocketAddr::V4(SocketAddrV4::new(dest_ip, dest_port));
             let real_dst = SocketAddr::V4(SocketAddrV4::new(real_dst_ip, dest_port));
 
-            let old_val = self
-                .syn_map
-                .insert(src, Arc::new(NatDstEntry::new(src, real_dst, mapped_dst)));
+            let entry = Arc::new(NatDstEntry::new(src, real_dst, mapped_dst));
+            if loopback_source_enabled() {
+                if let Some(peer_manager) = self.peer_manager.upgrade() {
+                    let route = peer_manager.get_route();
+                    entry
+                        .connect_src
+                        .store(confirmed_source(route.as_ref(), Some(from_peer), src).await);
+                } else {
+                    entry.connect_src.store(UNCONFIRMED_SOURCE);
+                }
+            }
+            let old_val = self.syn_map.insert(src, entry);
             tracing::info!(src = ?src, ?real_dst, ?mapped_dst, old_entry = ?old_val, "tcp syn received");
 
             // if smoltcp is enabled, add the listener to the net

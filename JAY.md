@@ -34,11 +34,19 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
    STUN. (`easytier/src/peers/peer_rpc_service.rs`, `easytier/src/connector/`,
    `easytier/src/common/global_ctx.rs`)
 8. **Callers told apart on loopback (opt-in).** Without a TUN device, EasyTier hands a connection
-   for its own virtual address to the local service on `127.0.0.1`. With `JAY_ET_LOOPBACK_SOURCE=1`
-   in the environment, the connection comes from `127.235.c.d` for a caller at `10.235.c.d` (Jay's
-   room network), and from the one shared address `127.255.255.254` for any other caller, so the
-   service can apply per-caller limits and no remote caller arrives as `127.0.0.1`. Off by default.
-   Where only `127.0.0.1` exists (macOS), the bind fails and the connection goes out as before.
+   for its own virtual address to the local service on `127.0.0.1`. With `JAY_ET_LOOPBACK_SOURCE`
+   set to exactly `1`, TCP connections handed to a local service on loopback are bound to a
+   stand-in for the caller instead:
+   - `127.235.c.d` for a caller at `10.235.c.d` (Jay's room network), but only when that is the
+     address the authenticated sending peer has in the route table and no other peer claims it
+     (TCP and QUIC proxy paths);
+   - the one shared address `127.255.255.254` for everything else: unconfirmed or shared
+     addresses, the room network's `.0.0`, `.0.1` and `.255.255`, addresses outside it, and every
+     KCP-proxied stream (its claimed source can't be tied to the sending peer).
+   No remote caller arrives as `127.0.0.1`. If the bind fails, the connection is refused rather
+   than going out unbound, so leave the switch off where only `127.0.0.1` exists (macOS). The
+   stand-in is the caller's own claimed virtual address, checked against its peer; it tells
+   callers apart for rate limits and is not an identity. UDP is unchanged. Off by default.
    (`easytier/src/gateway/tcp_proxy.rs`, `quic_proxy.rs`, `kcp_proxy.rs`)
 9. **Build hygiene** (`.github/workflows/jay-build.yml`):
    - The build runs with `--locked`, and `cargo audit` runs on every build. Any advisory not reviewed
