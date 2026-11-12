@@ -31,15 +31,36 @@ ignore = [
     "RUSTSEC-2026-0383", # webpki-root-certs
     "RUSTSEC-2026-0387", # crypto-bigint
     "RUSTSEC-2026-0459", # libsqlite3-sys
-    # hickory-proto 0.25: panics and memory amplification on malicious DNS answers. Jay's build uses
-    # hickory 0.26.3, which has the fixes. 0.25 stays in Cargo.lock only for the magic-dns feature
-    # (hickory-client/hickory-server), which Jay doesn't build.
+    # hickory 0.25.2 (hickory-proto, hickory-resolver). Not in Jay's build: easytier's only path to
+    # 0.25.2 is the magic-dns feature (hickory-client/hickory-server 0.25, plus the renamed
+    # hickory-proto-v25/hickory-resolver-v25 deps in easytier/Cargo.toml). magic-dns is in upstream's
+    # default features, but Jay builds with --no-default-features. For Jay's features,
+    # `cargo tree -e normal --target <t> -i hickory-proto@0.25.2` (and hickory-resolver@0.25.2,
+    # hickory-client, hickory-server) matches no package on Windows, macOS, Linux or Android. Jay's build
+    # uses hickory-resolver/hickory-proto/hickory-net 0.26.3, which none of these flag.
+    # TODO(exit): delete these entries once magic-dns moves to hickory-client 0.26 (or is removed).
+    #
+    # Malicious DNS answers: panics and memory amplification (0118 is in DNSSEC code, 0490 in zone-file
+    # parsing). Fixed in 0.26.1/0.26.2.
     "RUSTSEC-2026-0118",
     "RUSTSEC-2026-0119",
     "RUSTSEC-2026-0487",
     "RUSTSEC-2026-0489",
     "RUSTSEC-2026-0490",
     "RUSTSEC-2026-0491",
+    # DNSSEC validation flaws. They only matter when DNSSEC validation is on. No hickory dnssec-*
+    # feature is enabled anywhere in the graph, even with magic-dns.
+    "RUSTSEC-2026-0504", # hickory-proto 0.25.0..<0.26.0-beta.1: inverted NSEC3 comparison forges
+                         # non-existence proofs. Fixed in hickory-net 0.26.2.
+    "RUSTSEC-2026-0505", # hickory-proto <0.26.0-beta.1: NSEC3 owner name not checked against the
+                         # zone. Fixed in hickory-net 0.26.2.
+    "RUSTSEC-2026-0511", # hickory-proto <0.26.0-beta.1: NXDOMAIN accepted for a proven empty
+                         # non-terminal. Fixed in hickory-net 0.26.2.
+    "RUSTSEC-2026-0512", # hickory-proto <0.26.0-beta.1: an unrelated signed RRset accepted as the
+                         # answer. Fixed in hickory-net 0.26.2.
+    "RUSTSEC-2026-0514", # hickory-resolver <0.26.2: with DNSSEC validation enabled, lookup() and
+                         # lookup_ip() returned bogus records as Ok. Only with validation on; plain
+                         # lookups are unchanged. Fixed in 0.26.2.
 
     # --- In the build, reviewed, not reachable ---
     # quick-xml: only through plist in service-manager, which reads launchd plists when installing a
