@@ -33,7 +33,13 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
    hole-punch requests, makes no exception for peers that ask for p2p (`need_p2p`), and doesn't use
    STUN. (`easytier/src/peers/peer_rpc_service.rs`, `easytier/src/connector/`,
    `easytier/src/common/global_ctx.rs`)
-8. **Build hygiene** (`.github/workflows/jay-build.yml`):
+8. **Callers told apart on loopback (opt-in).** Without a TUN device, EasyTier hands a connection
+   for its own virtual address to the local service on `127.0.0.1`. With `JAY_ET_LOOPBACK_SOURCE=1`
+   in the environment, the connection comes from `127.b.c.d` for a caller at virtual address
+   `a.b.c.d`, so the service can apply per-caller limits. Off by default. Where only `127.0.0.1`
+   exists (macOS), the bind fails and the connection goes out as before.
+   (`easytier/src/gateway/tcp_proxy.rs`, `quic_proxy.rs`, `kcp_proxy.rs`)
+9. **Build hygiene** (`.github/workflows/jay-build.yml`):
    - The build runs with `--locked`, and `cargo audit` runs on every build. Any advisory not reviewed
      in `.cargo/audit.toml` fails the build, so no release goes out with an unreviewed advisory.
    - Every GitHub Action is pinned to a commit hash.

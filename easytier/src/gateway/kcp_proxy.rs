@@ -398,7 +398,10 @@ impl KcpProxyDst {
         let _g = global_ctx.net_ns.guard();
         let connector = NatDstTcpConnector {};
         let ret = connector
-            .connect("0.0.0.0:0".parse().unwrap(), dst_socket)
+            .connect(
+                SocketAddr::new(src_ip.into(), src_socket.port()),
+                dst_socket,
+            )
             .await?;
 
         if let Some(mut e) = proxy_entries.get_mut(&kcp_stream.conn_id()) {
