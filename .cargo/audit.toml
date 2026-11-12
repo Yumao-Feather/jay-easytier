@@ -40,6 +40,14 @@ ignore = [
     "RUSTSEC-2026-0489",
     "RUSTSEC-2026-0490",
     "RUSTSEC-2026-0491",
+    # DNSSEC validation flaws in hickory 0.25 (NSEC3 checks, unrelated signed RRsets, empty
+    # non-terminals, unvalidated records from lookup). Same 0.25-only magic-dns path as above, and
+    # even there no hickory DNSSEC feature is enabled. Jay's build has 0.26.3, which none of them flag.
+    "RUSTSEC-2026-0504",
+    "RUSTSEC-2026-0505",
+    "RUSTSEC-2026-0511",
+    "RUSTSEC-2026-0512",
+    "RUSTSEC-2026-0514",
 
     # --- In the build, reviewed, not reachable ---
     # quick-xml: only through plist in service-manager, which reads launchd plists when installing a
