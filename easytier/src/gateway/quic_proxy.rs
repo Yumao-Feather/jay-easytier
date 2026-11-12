@@ -644,16 +644,16 @@ impl QuicStreamReceiver {
                                                 }
                                             }
                                             Err(e) => {
-                                                    // Jay: limited like the TCP path while the switch is on.
-                                                    static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-                                                    if !crate::gateway::tcp_proxy::loopback_source_enabled()
-                                                        || crate::gateway::tcp_proxy::once_a_minute(&LAST)
-                                                    {
-                                                        warn!("failed to establish quic stream: {:?}", e);
-                                                    } else {
-                                                        debug!("failed to establish quic stream: {:?}", e);
-                                                    }
+                                                // Jay: limited like the TCP path while the switch is on.
+                                                static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                                                if !crate::gateway::tcp_proxy::loopback_source_enabled()
+                                                    || crate::gateway::tcp_proxy::once_a_minute(&LAST)
+                                                {
+                                                    warn!("failed to establish quic stream: {:?}", e);
+                                                } else {
+                                                    debug!("failed to establish quic stream: {:?}", e);
                                                 }
+                                            }
                                         }
                                     });
                                 }

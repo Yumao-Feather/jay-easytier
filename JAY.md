@@ -44,9 +44,7 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
      the public network's `.0.0`, `.0.1` and `.255.255`, addresses outside it, and every KCP-proxied
      stream (Jay's builds don't include KCP).
    No remote TCP caller arrives as `127.0.0.1`. If the bind fails, the connection is refused rather
-   than going out unbound, so leave the switch off where only `127.0.0.1` exists (macOS). While the
-   switch is on, failed connections to the local service are logged at most once a minute (the rest
-   at debug). Limits of the check: the sending peer id comes from the packet header, which isn't
+   than going out unbound, so leave the switch off where only `127.0.0.1` exists (macOS). While the switch is on, failed proxied connections (TCP and QUIC) are logged at most once a minute (the rest at debug). Limits of the check: the sending peer id comes from the packet header, which isn't
    checked against the connection a relayed packet came over, so a peer that forwards traffic
    between a caller and this node could forge it; route entries aren't signed by the peer they
    describe, so an address whose real holder briefly drops out of the route table, or is pushed out

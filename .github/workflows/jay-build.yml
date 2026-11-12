@@ -69,7 +69,7 @@ jobs:
         run: |
           set -o pipefail
           count() {
-            cargo test --locked -p easytier --no-default-features --features "$JAY_FEATURES" --lib -- "$1" --list 2>/dev/null | grep -c ': test$' || true
+            cargo test --locked -p easytier --no-default-features --features "$JAY_FEATURES" --lib -- "$1" --list 2>/dev/null | grep -c "^$1.*: test\$" || true
           }
           ok=1
           for filter in rpc_service::api::jay_rpc_portal_tests peers::encrypt common::dns::tests::jay \

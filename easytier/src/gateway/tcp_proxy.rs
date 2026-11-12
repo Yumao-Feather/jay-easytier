@@ -66,7 +66,8 @@ pub(crate) fn loopback_source_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var(LOOPBACK_SOURCE_ENV).is_ok_and(|v| v == "1"))
 }
 
-/// Jay's public network (where the room directory lives): callers inside it keep their own stand-in address.
+/// Jay's public network (where the room directory lives): callers inside it keep their own
+/// stand-in address.
 const PUBLIC_NETWORK: [u8; 2] = [10, 235];
 
 /// The one stand-in for every caller that doesn't get its own. Local services count all of
