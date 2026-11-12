@@ -612,8 +612,8 @@ impl QuicStreamReceiver {
                     };
 
                     let ctx = self.ctx.clone();
-                    // Jay: the peer that opened this connection (its address carries the
-                    // authenticated sender's peer id), to confirm the source it claims.
+                    // Jay: the peer that opened this connection (its address carries the sending
+                    // peer id from the packet header), to confirm the source it claims.
                     let from_peer = QuicAddr::try_from(addr).ok().map(|a| a.peer_id);
                     self.tasks.spawn(async move {
                         let mut tasks = JoinSet::new();
@@ -778,14 +778,22 @@ impl QuicStreamReceiver {
 
         debug!("quic connect to dst socket: {:?}", dst_socket);
 
+        // Jay: confirm the claimed source (only matters for a local service on loopback), before
+        // entering the network namespace.
+        let src = if dst_socket.ip().is_loopback() {
+            let me = global_ctx.get_ipv4().map(|inet| inet.address());
+            crate::gateway::tcp_proxy::confirmed_source(
+                route.as_ref(),
+                from_peer,
+                me,
+                SocketAddr::new(src_ip, src_socket.port()),
+            )
+            .await
+        } else {
+            SocketAddr::new(src_ip, src_socket.port())
+        };
         let _g = global_ctx.net_ns.guard();
         let connector = crate::gateway::tcp_proxy::NatDstTcpConnector {};
-        let src = crate::gateway::tcp_proxy::confirmed_source(
-            route.as_ref(),
-            from_peer,
-            SocketAddr::new(src_ip, src_socket.port()),
-        )
-        .await;
         let ret = connector.connect(src, dst_socket).await?;
 
         if let Some(mut e) = proxy_entries.get_mut(&handle) {

@@ -38,15 +38,19 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
    set to exactly `1`, TCP connections handed to a local service on loopback are bound to a
    stand-in for the caller instead:
    - `127.235.c.d` for a caller at `10.235.c.d` (Jay's room network), but only when that is the
-     address the authenticated sending peer has in the route table and no other peer claims it
-     (TCP and QUIC proxy paths);
+     address the sending peer declares in the route table and no other peer, this node included,
+     declares it (TCP and QUIC proxy paths);
    - the one shared address `127.255.255.254` for everything else: unconfirmed or shared
      addresses, the room network's `.0.0`, `.0.1` and `.255.255`, addresses outside it, and every
-     KCP-proxied stream (its claimed source can't be tied to the sending peer).
-   No remote caller arrives as `127.0.0.1`. If the bind fails, the connection is refused rather
-   than going out unbound, so leave the switch off where only `127.0.0.1` exists (macOS). The
-   stand-in is the caller's own claimed virtual address, checked against its peer; it tells
-   callers apart for rate limits and is not an identity. UDP is unchanged. Off by default.
+     KCP-proxied stream (Jay's builds don't include KCP).
+   No remote TCP caller arrives as `127.0.0.1`. If the bind fails, the connection is refused rather
+   than going out unbound, so leave the switch off where only `127.0.0.1` exists (macOS).
+   Limits of the check: the sending peer id comes from the packet header, which isn't checked
+   against the connection a relayed packet came over, so a peer that forwards traffic between a
+   caller and this node could forge it; and an address whose real holder briefly drops out of the
+   route table can be taken over for that time. The stand-in tells callers apart for rate limits;
+   it is not an identity. UDP is unchanged. The room network (`10.235.0.0/16`) is fixed here and
+   must match Jay's `PublicNetworkProfile.Subnet`. Off by default.
    (`easytier/src/gateway/tcp_proxy.rs`, `quic_proxy.rs`, `kcp_proxy.rs`)
 9. **Build hygiene** (`.github/workflows/jay-build.yml`):
    - The build runs with `--locked`, and `cargo audit` runs on every build. Any advisory not reviewed

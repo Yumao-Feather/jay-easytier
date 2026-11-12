@@ -94,28 +94,50 @@ pub(crate) fn loopback_source_for(src: SocketAddr) -> std::net::Ipv4Addr {
     SHARED_LOOPBACK_SOURCE
 }
 
-/// The caller's source if it is the address its authenticated peer was assigned and no other
-/// peer claims it too; [`UNCONFIRMED_SOURCE`] otherwise. `assigned` is the peer's own address
-/// from the route table, `holders` how many peers there claim `claimed`'s address.
+/// The caller's source if it is the address its sending peer declared in the route table and
+/// no other peer (this node included) declares it too; [`UNCONFIRMED_SOURCE`] otherwise.
+/// `declared` is the peer's own address from the route table, `holders` how many declare
+/// `claimed`'s address.
 pub(crate) fn confirm_source(
     claimed: SocketAddr,
-    assigned: Option<std::net::Ipv4Addr>,
+    declared: Option<std::net::Ipv4Addr>,
     holders: usize,
 ) -> SocketAddr {
     match claimed.ip().to_canonical() {
-        IpAddr::V4(ip) if assigned == Some(ip) && holders == 1 => {
+        IpAddr::V4(ip) if declared == Some(ip) && holders == 1 => {
             SocketAddr::new(IpAddr::V4(ip), claimed.port())
         }
         _ => UNCONFIRMED_SOURCE,
     }
 }
 
-/// [`confirm_source`] against the route table, for a stream that `from_peer` (the
-/// authenticated sender) opened claiming `claimed`. With the switch off, `claimed` is
-/// returned unchanged.
+/// How many peers declare `ip`: those in `routes`, plus this node when `me` is `ip`.
+pub(crate) fn holders_of(
+    ip: std::net::Ipv4Addr,
+    routes: &[crate::proto::api::instance::Route],
+    me: Option<std::net::Ipv4Addr>,
+) -> usize {
+    let others = routes
+        .iter()
+        .filter(|r| {
+            r.ipv4_addr
+                .and_then(|inet| inet.address)
+                .map(std::net::Ipv4Addr::from)
+                == Some(ip)
+        })
+        .count();
+    others + usize::from(me == Some(ip))
+}
+
+/// [`confirm_source`] against the route table, for a stream `from_peer` opened claiming
+/// `claimed`; `me` is this node's own address. `from_peer` is the sending peer id from the
+/// packet header: relayed packets aren't checked against the connection they came over, so a
+/// peer that forwards traffic between a caller and this node could still forge it (the return
+/// route makes any other forger fail). With the switch off, `claimed` is returned unchanged.
 pub(crate) async fn confirmed_source(
     route: &(dyn crate::peers::route_trait::Route + Send + Sync),
     from_peer: Option<crate::common::PeerId>,
+    me: Option<std::net::Ipv4Addr>,
     claimed: SocketAddr,
 ) -> SocketAddr {
     if !loopback_source_enabled() {
@@ -127,23 +149,13 @@ pub(crate) async fn confirmed_source(
     let IpAddr::V4(ip) = claimed.ip().to_canonical() else {
         return UNCONFIRMED_SOURCE;
     };
-    let assigned = route
+    let declared = route
         .get_peer_info(from_peer)
         .await
         .and_then(|info| info.ipv4_addr)
         .map(std::net::Ipv4Addr::from);
-    let holders = route
-        .list_routes()
-        .await
-        .iter()
-        .filter(|r| {
-            r.ipv4_addr
-                .and_then(|inet| inet.address)
-                .map(std::net::Ipv4Addr::from)
-                == Some(ip)
-        })
-        .count();
-    confirm_source(claimed, assigned, holders)
+    let holders = holders_of(ip, &route.list_routes().await, me);
+    confirm_source(claimed, declared, holders)
 }
 
 /// When `enabled` and the connection goes to a local service on loopback, binds the socket to
@@ -163,11 +175,24 @@ fn bind_loopback_source(
     socket
         .bind(SocketAddr::new(local.into(), 0))
         .inspect_err(|error| {
-            tracing::warn!(
-                ?error,
-                ?local,
-                "bind loopback source failed, refusing the connection"
-            )
+            // At most one warning a minute: a flood of failures shouldn't flood the log too.
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static LAST: AtomicU64 = AtomicU64::new(0);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            let last = LAST.load(Ordering::Relaxed);
+            if now >= last + 60
+                && LAST
+                    .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_ok()
+            {
+                tracing::warn!(
+                    ?error,
+                    ?local,
+                    "bind loopback source failed, refusing the connection"
+                );
+            }
         })
 }
 
@@ -230,6 +255,34 @@ mod loopback_source_tests {
         );
         assert_eq!(
             confirm_source("[fd00::1]:4000".parse().unwrap(), Some(v4("10.235.4.7")), 1),
+            UNCONFIRMED_SOURCE
+        );
+    }
+
+    #[test]
+    fn holders_count_every_peer_declaring_the_address_and_this_node() {
+        let route = |peer_id: u32, ip: &str| crate::proto::api::instance::Route {
+            peer_id,
+            ipv4_addr: Some(cidr::Ipv4Inet::new(v4(ip), 16).unwrap().into()),
+            ..Default::default()
+        };
+        let routes = [
+            route(1, "10.235.4.7"),
+            route(2, "10.235.4.8"),
+            route(3, "10.235.4.7"),
+        ];
+        assert_eq!(holders_of(v4("10.235.4.7"), &routes, None), 2);
+        assert_eq!(holders_of(v4("10.235.4.8"), &routes, None), 1);
+        assert_eq!(
+            holders_of(v4("10.235.4.8"), &routes, Some(v4("10.235.4.8"))),
+            2
+        );
+        assert_eq!(holders_of(v4("10.235.4.9"), &routes, None), 0);
+        // Unknown peer (no declared address) or nobody holding it: never confirmed.
+        let claimed: SocketAddr = "10.235.4.9:1".parse().unwrap();
+        assert_eq!(confirm_source(claimed, None, 0), UNCONFIRMED_SOURCE);
+        assert_eq!(
+            confirm_source(claimed, Some(v4("10.235.4.9")), 0),
             UNCONFIRMED_SOURCE
         );
     }
@@ -338,9 +391,9 @@ type NatDstEntryState = TcpProxyEntryState;
 pub struct NatDstEntry {
     id: uuid::Uuid,
     src: SocketAddr,
-    /// Jay: the source to hand to the local service (see [`confirmed_source`]); `src` unless the
-    /// loopback-source switch is on.
-    connect_src: AtomicCell<SocketAddr>,
+    /// Jay: the peer id the SYN came from, to confirm `src` before a TCP connection to a local
+    /// service (see [`confirmed_source`]).
+    from_peer: Option<crate::common::PeerId>,
     real_dst: SocketAddr,
     mapped_dst: SocketAddr,
     start_time: Instant,
@@ -354,7 +407,7 @@ impl NatDstEntry {
         Self {
             id: uuid::Uuid::new_v4(),
             src,
-            connect_src: AtomicCell::new(src),
+            from_peer: None,
             real_dst,
             mapped_dst,
             start_time: Instant::now(),
@@ -881,6 +934,7 @@ impl<C: NatDstConnector> TcpProxy<C> {
         let conn_map = self.conn_map.clone();
         let addr_conn_map = self.addr_conn_map.clone();
         let connector = self.connector.clone();
+        let peer_mgr = self.peer_manager.clone();
         let accept_task = async move {
             let conn_map = conn_map.clone();
             loop {
@@ -934,6 +988,7 @@ impl<C: NatDstConnector> TcpProxy<C> {
 
                 tasks.lock().unwrap().spawn(Self::connect_to_nat_dst(
                     connector.clone(),
+                    peer_mgr.clone(),
                     global_ctx.clone(),
                     tcp_stream,
                     conn_map.clone(),
@@ -967,6 +1022,7 @@ impl<C: NatDstConnector> TcpProxy<C> {
 
     async fn connect_to_nat_dst(
         connector: C,
+        peer_mgr: Weak<PeerManager>,
         global_ctx: ArcGlobalCtx,
         src_tcp_stream: ProxyTcpStream,
         conn_map: ConnSockMap,
@@ -1011,11 +1067,26 @@ impl<C: NatDstConnector> TcpProxy<C> {
             )
             .inc();
 
+        // Jay: only a plain TCP connection to a local service gets a confirmed stand-in; the
+        // KCP / QUIC source-side connectors pass the source on to the remote side unchanged.
+        let src = if loopback_source_enabled()
+            && connector.transport_type() == TcpProxyEntryTransportType::Tcp
+            && nat_dst.ip().is_loopback()
+        {
+            match peer_mgr.upgrade() {
+                Some(peer_manager) => {
+                    let route = peer_manager.get_route();
+                    let me = global_ctx.get_ipv4().map(|inet| inet.address());
+                    confirmed_source(route.as_ref(), nat_entry.from_peer, me, nat_entry.src).await
+                }
+                None => UNCONFIRMED_SOURCE,
+            }
+        } else {
+            nat_entry.src
+        };
+
         let _guard = global_ctx.net_ns.guard();
-        let Ok(dst_tcp_stream) = connector
-            .connect(nat_entry.connect_src.load(), nat_dst)
-            .await
-        else {
+        let Ok(dst_tcp_stream) = connector.connect(src, nat_dst).await else {
             tracing::error!("connect to dst failed: {:?}", nat_entry);
             nat_entry.state.store(NatDstEntryState::Closed);
             Self::remove_entry_from_all_conn_map(conn_map, addr_conn_map, nat_entry);
@@ -1139,7 +1210,8 @@ impl<C: NatDstConnector> TcpProxy<C> {
         };
         let mut real_dst_ip = origin_ip;
         let hdr = packet.mut_peer_manager_header().unwrap();
-        // Jay: the authenticated sender, to confirm the source address it claims.
+        // Jay: the sending peer id from the header. Relayed packets aren't checked against the
+        // connection they came over; the return route is what makes a forged one fail.
         let from_peer = hdr.from_peer_id.get();
 
         if !self.connector.check_packet_from_peer(
@@ -1173,18 +1245,9 @@ impl<C: NatDstConnector> TcpProxy<C> {
             let mapped_dst = SocketAddr::V4(SocketAddrV4::new(dest_ip, dest_port));
             let real_dst = SocketAddr::V4(SocketAddrV4::new(real_dst_ip, dest_port));
 
-            let entry = Arc::new(NatDstEntry::new(src, real_dst, mapped_dst));
-            if loopback_source_enabled() {
-                if let Some(peer_manager) = self.peer_manager.upgrade() {
-                    let route = peer_manager.get_route();
-                    entry
-                        .connect_src
-                        .store(confirmed_source(route.as_ref(), Some(from_peer), src).await);
-                } else {
-                    entry.connect_src.store(UNCONFIRMED_SOURCE);
-                }
-            }
-            let old_val = self.syn_map.insert(src, entry);
+            let mut entry = NatDstEntry::new(src, real_dst, mapped_dst);
+            entry.from_peer = Some(from_peer);
+            let old_val = self.syn_map.insert(src, Arc::new(entry));
             tracing::info!(src = ?src, ?real_dst, ?mapped_dst, old_entry = ?old_val, "tcp syn received");
 
             // if smoltcp is enabled, add the listener to the net
