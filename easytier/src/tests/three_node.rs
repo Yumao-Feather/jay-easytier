@@ -3200,7 +3200,9 @@ pub async fn need_p2p_overrides_lazy_p2p() {
 
 #[tokio::test]
 #[serial_test::serial]
-pub async fn disable_p2p_still_connects_to_need_p2p_peers() {
+pub async fn jay_disable_p2p_ignores_need_p2p_peers() {
+    // Jay: relay only means relay only. Upstream let a peer with need_p2p pull a disable_p2p
+    // node into a direct connection, which revealed its address to that peer.
     let insts = init_lazy_p2p_three_node_ex("udp", |cfg| {
         let mut flags = cfg.get_flags();
         if cfg.get_inst_name() == "inst1" {
@@ -3216,17 +3218,13 @@ pub async fn disable_p2p_still_connects_to_need_p2p_peers() {
 
     let inst3_peer_id = insts[2].peer_id();
     wait_route_cost(&insts[0], inst3_peer_id, 2, Duration::from_secs(5)).await;
-    wait_for_condition(
-        || async {
-            insts[0]
-                .get_peer_manager()
-                .get_peer_map()
-                .has_peer(inst3_peer_id)
-        },
-        Duration::from_secs(10),
-    )
-    .await;
-    wait_route_cost(&insts[0], inst3_peer_id, 1, Duration::from_secs(10)).await;
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert!(
+        !insts[0]
+            .get_peer_manager()
+            .get_peer_map()
+            .has_peer(inst3_peer_id)
+    );
 
     drop_insts(insts).await;
 }

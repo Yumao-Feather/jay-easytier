@@ -77,6 +77,16 @@ impl UdpHolePunchServer {
     }
 }
 
+impl UdpHolePunchServer {
+    /// Jay: a relay-only node never sends punch packets or reveals a mapped address for others.
+    fn jay_refuse_if_relay_only(&self) -> rpc_types::error::Result<()> {
+        if self.common.get_global_ctx().jay_relay_only() {
+            return Err(anyhow::anyhow!("relay only: hole punching is disabled").into());
+        }
+        Ok(())
+    }
+}
+
 #[async_trait::async_trait]
 impl UdpHolePunchRpc for UdpHolePunchServer {
     type Controller = BaseController;
@@ -86,6 +96,7 @@ impl UdpHolePunchRpc for UdpHolePunchServer {
         _ctrl: Self::Controller,
         input: SelectPunchListenerRequest,
     ) -> rpc_types::error::Result<SelectPunchListenerResponse> {
+        self.jay_refuse_if_relay_only()?;
         let (_, addr) = self
             .common
             .select_listener(input.force_new, input.prefer_port_mapping)
@@ -103,6 +114,7 @@ impl UdpHolePunchRpc for UdpHolePunchServer {
         ctrl: Self::Controller,
         input: SendPunchPacketConeRequest,
     ) -> rpc_types::error::Result<Void> {
+        self.jay_refuse_if_relay_only()?;
         self.cone_server.send_punch_packet_cone(ctrl, input).await
     }
 
@@ -112,6 +124,7 @@ impl UdpHolePunchRpc for UdpHolePunchServer {
         _ctrl: Self::Controller,
         input: SendPunchPacketHardSymRequest,
     ) -> rpc_types::error::Result<SendPunchPacketHardSymResponse> {
+        self.jay_refuse_if_relay_only()?;
         let _locked = get_sym_punch_lock(self.common.get_peer_mgr().my_peer_id())
             .try_lock_owned()
             .with_context(|| "sym punch lock is busy")?;
@@ -125,6 +138,7 @@ impl UdpHolePunchRpc for UdpHolePunchServer {
         _ctrl: Self::Controller,
         input: SendPunchPacketEasySymRequest,
     ) -> rpc_types::error::Result<Void> {
+        self.jay_refuse_if_relay_only()?;
         let _locked = get_sym_punch_lock(self.common.get_peer_mgr().my_peer_id())
             .try_lock_owned()
             .with_context(|| "sym punch lock is busy")?;
@@ -140,6 +154,7 @@ impl UdpHolePunchRpc for UdpHolePunchServer {
         _ctrl: Self::Controller,
         input: SendPunchPacketBothEasySymRequest,
     ) -> rpc_types::error::Result<SendPunchPacketBothEasySymResponse> {
+        self.jay_refuse_if_relay_only()?;
         let _locked = get_sym_punch_lock(self.common.get_peer_mgr().my_peer_id())
             .try_lock_owned()
             .with_context(|| "sym punch lock is busy")?;

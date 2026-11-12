@@ -301,9 +301,12 @@ impl GlobalCtx {
             stun_info_collector.set_stun_servers_v6(StunInfoCollector::get_default_servers_v6());
         }
 
-        let stun_info_collector = Arc::new(stun_info_collector);
-
         let flags = config_fs.get_flags();
+        if flags.disable_p2p {
+            Self::jay_silence_stun(&stun_info_collector);
+        }
+
+        let stun_info_collector = Arc::new(stun_info_collector);
 
         let base_feature_flags = PeerFeatureFlag::default();
         let feature_flags = Self::derive_feature_flags(&flags, base_feature_flags);
@@ -530,6 +533,21 @@ impl GlobalCtx {
 
     pub fn get_flags(&self) -> Flags {
         self.flags.load().as_ref().clone()
+    }
+
+    /// Jay: relay only (`--disable-p2p`). This node never tells other members where it is: no
+    /// address lists, no hole punching for them, and no STUN lookups, so only the nodes it
+    /// connects to itself (its relays) ever see its address.
+    pub fn jay_relay_only(&self) -> bool {
+        self.flags.load().disable_p2p
+    }
+
+    /// Jay: with no STUN servers the collector never learns (or asks a third party for) this
+    /// node's public address or NAT type.
+    fn jay_silence_stun(collector: &StunInfoCollector) {
+        collector.set_stun_servers(Vec::new());
+        collector.set_stun_servers_v6(Vec::new());
+        collector.set_tcp_stun_servers(Vec::new());
     }
 
     pub fn set_flags(&self, flags: Flags) {

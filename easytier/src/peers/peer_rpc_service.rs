@@ -43,6 +43,10 @@ impl DirectConnectorRpc for DirectConnectorManagerRpcServer {
         _: BaseController,
         _: GetIpListRequest,
     ) -> rpc_types::error::Result<GetIpListResponse> {
+        // Jay: a relay-only node tells no one its addresses or listeners.
+        if self.global_ctx.jay_relay_only() {
+            return Ok(GetIpListResponse::default());
+        }
         let mut ret = self.global_ctx.get_ip_collector().collect_ip_addrs().await;
         ret.listeners = self
             .global_ctx
@@ -67,6 +71,9 @@ impl DirectConnectorRpc for DirectConnectorManagerRpcServer {
         _: BaseController,
         req: SendUdpHolePunchPacketRequest,
     ) -> rpc_types::error::Result<Void> {
+        if self.global_ctx.jay_relay_only() {
+            return Err(anyhow::anyhow!("relay only: hole punching is disabled").into());
+        }
         let listener_port = req.listener_port as u16;
         let connector_addr: SocketAddr = req
             .connector_addr
@@ -132,5 +139,40 @@ mod tests {
 
         assert_eq!(ip_list.public_ipv6, None);
         assert_eq!(ip_list.interface_ipv6s, vec![physical_ipv6.into()]);
+    }
+
+    #[tokio::test]
+    async fn jay_relay_only_reveals_no_addresses_and_refuses_hole_punching() {
+        use crate::proto::{
+            common::SocketAddr as ProtoSocketAddr,
+            peer_rpc::{DirectConnectorRpc, GetIpListRequest, SendUdpHolePunchPacketRequest},
+            rpc_types::controller::BaseController,
+        };
+
+        let global_ctx = get_mock_global_ctx();
+        let server = super::DirectConnectorManagerRpcServer::new(global_ctx.clone());
+
+        let mut flags = global_ctx.get_flags();
+        flags.disable_p2p = true;
+        global_ctx.set_flags(flags);
+        assert!(global_ctx.jay_relay_only());
+
+        let hidden = server
+            .get_ip_list(BaseController::default(), GetIpListRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(hidden, GetIpListResponse::default());
+
+        let target: std::net::SocketAddr = "192.0.2.1:9".parse().unwrap();
+        let punch = server
+            .send_udp_hole_punch_packet(
+                BaseController::default(),
+                SendUdpHolePunchPacketRequest {
+                    connector_addr: Some(ProtoSocketAddr::from(target)),
+                    listener_port: 0,
+                },
+            )
+            .await;
+        assert!(punch.is_err());
     }
 }

@@ -173,6 +173,10 @@ impl TcpHolePunchRpc for TcpHolePunchServer {
         _ctrl: Self::Controller,
         input: TcpHolePunchRequest,
     ) -> rpc_types::error::Result<TcpHolePunchResponse> {
+        // Jay: a relay-only node never reveals a mapped address or connects out to a member.
+        if self.peer_mgr.get_global_ctx().jay_relay_only() {
+            return Err(anyhow::anyhow!("relay only: hole punching is disabled").into());
+        }
         let my_tcp_nat_type = NatType::try_from(
             self.peer_mgr
                 .get_global_ctx()

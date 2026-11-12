@@ -29,7 +29,11 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
 6. **No built-in public DNS servers.** When the system resolver failed, upstream also asked two fixed
    public DNS servers, in plain UDP, for the host name. Only the system's own name servers are used now.
    (`easytier/src/common/dns.rs`)
-7. **Build hygiene** (`.github/workflows/jay-build.yml`):
+7. **Relay only stays relay only.** With `--disable-p2p` the node answers no address-list or
+   hole-punch requests, makes no exception for peers that ask for p2p (`need_p2p`), and doesn't use
+   STUN. (`easytier/src/peers/peer_rpc_service.rs`, `easytier/src/connector/`,
+   `easytier/src/common/global_ctx.rs`)
+8. **Build hygiene** (`.github/workflows/jay-build.yml`):
    - The build runs with `--locked`, and `cargo audit` runs on every build. Any advisory not reviewed
      in `.cargo/audit.toml` fails the build, so no release goes out with an unreviewed advisory.
    - Every GitHub Action is pinned to a commit hash.

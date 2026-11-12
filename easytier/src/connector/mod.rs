@@ -31,7 +31,8 @@ pub(crate) fn should_try_p2p_with_peer(
     feature_flag
         .map(|flag| {
             (allow_public_server || !flag.is_public_server)
-                && (!local_disable_p2p || flag.need_p2p)
+                // Jay: relay only means relay only; a peer asking for p2p (need_p2p) gets no exception.
+                && !local_disable_p2p
                 && (!flag.disable_p2p || local_need_p2p)
         })
         .unwrap_or(!local_disable_p2p)
@@ -403,7 +404,7 @@ mod tests {
     }
 
     #[test]
-    fn disable_p2p_only_allows_need_p2p_exceptions() {
+    fn jay_disable_p2p_has_no_need_p2p_exception() {
         let normal_peer = PeerFeatureFlag::default();
         let need_peer = PeerFeatureFlag {
             need_p2p: true,
@@ -433,7 +434,8 @@ mod tests {
             true,
             false
         ));
-        assert!(should_try_p2p_with_peer(
+        // Jay: a peer's need_p2p no longer overrides local relay-only.
+        assert!(!should_try_p2p_with_peer(
             Some(&need_peer),
             false,
             true,
@@ -451,7 +453,7 @@ mod tests {
             false,
             true
         ));
-        assert!(should_try_p2p_with_peer(
+        assert!(!should_try_p2p_with_peer(
             Some(&disable_need_peer),
             false,
             true,
