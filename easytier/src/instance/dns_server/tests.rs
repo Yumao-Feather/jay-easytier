@@ -5,9 +5,9 @@ use std::time::Duration;
 
 use cidr::Ipv4Inet;
 use hickory_client::client::{Client, ClientHandle as _};
-use hickory_proto::rr;
-use hickory_proto::runtime::TokioRuntimeProvider;
-use hickory_proto::udp::UdpClientStream;
+use hickory_proto_v25::rr;
+use hickory_proto_v25::runtime::TokioRuntimeProvider;
+use hickory_proto_v25::udp::UdpClientStream;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 

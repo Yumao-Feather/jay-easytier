@@ -1,5 +1,5 @@
-use hickory_proto::rr;
-use hickory_proto::rr::RData;
+use hickory_proto_v25::rr;
+use hickory_proto_v25::rr::RData;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};

@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use anyhow::Context;
-use hickory_proto::runtime::TokioRuntimeProvider;
 use hickory_resolver::config::{LookupIpStrategy, ResolverConfig, ResolverOpts};
-use hickory_resolver::name_server::{GenericConnector, TokioConnectionProvider};
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
+use hickory_resolver::proto::rr::{RData, Record};
 use hickory_resolver::system_conf::read_system_conf;
 use hickory_resolver::{Resolver, TokioResolver};
 use once_cell::sync::Lazy;
@@ -17,12 +17,12 @@ use super::error::Error;
 /// host name that the system resolver could not look up was also sent, in plain UDP, to third
 /// parties the user never chose. Only the system's own name servers are used now.
 pub fn get_default_resolver_config() -> ResolverConfig {
-    ResolverConfig::new()
+    ResolverConfig::from_name_servers(Vec::new())
 }
 
 pub static ALLOW_USE_SYSTEM_DNS_RESOLVER: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(true));
 
-pub static RESOLVER: Lazy<Arc<Resolver<GenericConnector<TokioRuntimeProvider>>>> =
+pub static RESOLVER: Lazy<Arc<Resolver<TokioRuntimeProvider>>> =
     Lazy::new(|| {
         let system_cfg = read_system_conf();
         let mut cfg = get_default_resolver_config();
@@ -34,10 +34,23 @@ pub static RESOLVER: Lazy<Arc<Resolver<GenericConnector<TokioRuntimeProvider>>>>
             opt = s.1;
         }
         opt.ip_strategy = LookupIpStrategy::Ipv4AndIpv6;
-        let builder = TokioResolver::builder_with_config(cfg, TokioConnectionProvider::default())
+        let builder = TokioResolver::builder_with_config(cfg, TokioRuntimeProvider::default())
             .with_options(opt);
-        Arc::new(builder.build())
+        // build() only fails when a TLS transport is compiled in; this build has none.
+        Arc::new(builder.build().expect("plain UDP/TCP resolver builds"))
     });
+
+/// The first string of the first TXT record among `answers`. Since hickory 0.26 a lookup returns
+/// every answer record (a CNAME chain can come first), so pick the TXT records out by type.
+fn first_txt_string(answers: &[Record]) -> Option<String> {
+    answers.iter().find_map(|r| match &r.data {
+        RData::TXT(txt) => txt
+            .txt_data
+            .first()
+            .map(|s| String::from_utf8_lossy(s).into_owned()),
+        _ => None,
+    })
+}
 
 pub async fn resolve_txt_record(domain_name: &str) -> Result<String, Error> {
     let r = RESOLVER.clone();
@@ -46,15 +59,11 @@ pub async fn resolve_txt_record(domain_name: &str) -> Result<String, Error> {
         .await
         .with_context(|| format!("txt_lookup failed, domain_name: {}", domain_name))?;
 
-    let txt_record = response
-        .iter()
-        .next()
+    let txt_data = first_txt_string(response.answers())
         .with_context(|| format!("no txt record found, domain_name: {}", domain_name))?;
-
-    let txt_data = String::from_utf8_lossy(&txt_record.txt_data()[0]);
     tracing::info!(?txt_data, ?domain_name, "get txt record");
 
-    Ok(txt_data.to_string())
+    Ok(txt_data)
 }
 
 pub async fn socket_addrs(
@@ -121,6 +130,22 @@ mod tests {
         let addrs = socket_addrs(&url, || Some(80)).await.unwrap();
         assert_eq!(2, addrs.len(), "addrs: {:?}", addrs);
         println!("addrs2: {:?}", addrs);
+    }
+
+    #[test]
+    fn jay_txt_answer_skips_other_records() {
+        use hickory_resolver::proto::rr::{
+            Name,
+            rdata::{CNAME, TXT},
+        };
+        let name = Name::from_ascii("peers.example.").unwrap();
+        let target = Name::from_ascii("real.example.").unwrap();
+        let answers = vec![
+            Record::from_rdata(name.clone(), 60, RData::CNAME(CNAME(target.clone()))),
+            Record::from_rdata(target, 60, RData::TXT(TXT::new(vec!["tcp://a:1".into()]))),
+        ];
+        assert_eq!(first_txt_string(&answers).as_deref(), Some("tcp://a:1"));
+        assert_eq!(first_txt_string(&answers[..1]), None);
     }
 
     #[test]

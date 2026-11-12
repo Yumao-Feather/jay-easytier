@@ -38,8 +38,8 @@ use crate::{
 use anyhow::Context;
 use cidr::Ipv4Inet;
 use dashmap::DashMap;
-use hickory_proto::rr::LowerName;
-use hickory_proto::serialize::binary::{BinDecodable, BinEncoder};
+use hickory_proto_v25::rr::LowerName;
+use hickory_proto_v25::serialize::binary::{BinDecodable, BinEncoder};
 use hickory_server::authority::{MessageRequest, MessageResponse};
 use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseInfo};
 use multimap::MultiMap;
@@ -251,8 +251,8 @@ struct ResponseWrapper {
     response: Arc<Mutex<Vec<u8>>>,
 }
 
-trait RecordIter<'a>: Iterator<Item = &'a hickory_proto::rr::Record> + Send + 'a {}
-impl<'a, T> RecordIter<'a> for T where T: Iterator<Item = &'a hickory_proto::rr::Record> + Send + 'a {}
+trait RecordIter<'a>: Iterator<Item = &'a hickory_proto_v25::rr::Record> + Send + 'a {}
+impl<'a, T> RecordIter<'a> for T where T: Iterator<Item = &'a hickory_proto_v25::rr::Record> + Send + 'a {}
 
 #[async_trait::async_trait]
 impl ResponseHandler for ResponseWrapper {
@@ -278,7 +278,7 @@ impl ResponseHandler for ResponseWrapper {
         let max_size = if let Some(edns) = response.get_edns() {
             edns.max_payload()
         } else {
-            hickory_proto::udp::MAX_RECEIVE_BUFFER_SIZE as u16
+            hickory_proto_v25::udp::MAX_RECEIVE_BUFFER_SIZE as u16
         };
 
         encoder.set_max_size(max_size);
@@ -363,7 +363,7 @@ impl MagicDnsServerInstanceData {
                 Request::new(
                     MessageRequest::from_bytes(request_payload).ok()?,
                     SocketAddr::from(SocketAddrV4::new(src_ip, src_port)),
-                    hickory_proto::xfer::Protocol::Udp,
+                    hickory_proto_v25::xfer::Protocol::Udp,
                 ),
                 request_payload.len(),
             )

@@ -64,6 +64,13 @@ are only taken when Jay needs them. Watch the EasyTier repo's releases and the R
   zstd 0.13.4 / zstd-safe 7.4.0 / zstd-sys 2.0.17. Removed the built-in public DNS servers (patch 6).
   Not taken: hickory-proto 0.26 (breaking; see `.cargo/audit.toml`). Upstream's ACL bypass fix does not
   apply (Jay doesn't use EasyTier ACLs).
+- **jay-v2.6.4-3** (2026-11-12). Relay only stays relay only (patch 7).
+- **jay-v2.6.4-4** (2026-11-12). hickory-resolver and hickory-proto 0.26.3 (fixes the six hickory-proto
+  advisories: panics and memory amplification on malicious DNS answers). The resolver code in
+  `common/dns.rs` and `connector/dns_connector.rs` was ported to the 0.26 API. The magic-dns feature
+  (not in Jay's build) stays on hickory 0.25, through the renamed `hickory-proto-v25` and
+  `hickory-resolver-v25` packages, because hickory-client has no 0.26 release yet. On the next rebase,
+  move magic-dns to 0.26 too if upstream has, and drop the renamed packages.
 
 ## Updating to a new upstream version
 

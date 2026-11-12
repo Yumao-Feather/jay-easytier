@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
-use hickory_proto::op::Edns;
-use hickory_proto::rr;
-use hickory_proto::rr::LowerName;
-use hickory_resolver::config::ResolverOpts;
-use hickory_resolver::name_server::TokioConnectionProvider;
-use hickory_resolver::system_conf::read_system_conf;
+use hickory_proto_v25::op::Edns;
+use hickory_proto_v25::rr;
+use hickory_proto_v25::rr::LowerName;
+use hickory_resolver_v25::config::ResolverOpts;
+use hickory_resolver_v25::name_server::TokioConnectionProvider;
+use hickory_resolver_v25::system_conf::read_system_conf;
 use hickory_server::ServerFuture;
 use hickory_server::authority::{AuthorityObject, Catalog, ZoneType};
 use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseInfo};
@@ -19,7 +19,6 @@ use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tokio::task::JoinSet;
 
-use crate::common::dns::get_default_resolver_config;
 
 use super::config::{GeneralConfig, Record, RunConfig};
 
@@ -90,7 +89,11 @@ impl Server {
 
         // use forwarder authority for the root zone
         let system_conf =
-            read_system_conf().unwrap_or((get_default_resolver_config(), ResolverOpts::default()));
+            read_system_conf().unwrap_or((
+                // Jay: no built-in public resolvers here either (see common/dns.rs).
+                hickory_resolver_v25::config::ResolverConfig::new(),
+                ResolverOpts::default(),
+            ));
         let forward_config = ForwardConfig {
             name_servers: system_conf
                 .0
@@ -258,9 +261,9 @@ mod tests {
     };
     use anyhow::Result;
     use hickory_client::client::{Client, ClientHandle};
-    use hickory_proto::rr;
-    use hickory_proto::runtime::TokioRuntimeProvider;
-    use hickory_proto::udp::UdpClientStream;
+    use hickory_proto_v25::rr;
+    use hickory_proto_v25::runtime::TokioRuntimeProvider;
+    use hickory_proto_v25::udp::UdpClientStream;
     use maplit::hashmap;
     use std::time::Duration;
 

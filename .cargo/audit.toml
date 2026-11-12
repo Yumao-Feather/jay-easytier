@@ -31,6 +31,15 @@ ignore = [
     "RUSTSEC-2026-0383", # webpki-root-certs
     "RUSTSEC-2026-0387", # crypto-bigint
     "RUSTSEC-2026-0459", # libsqlite3-sys
+    # hickory-proto 0.25: panics and memory amplification on malicious DNS answers. Jay's build uses
+    # hickory 0.26.3, which has the fixes. 0.25 stays in Cargo.lock only for the magic-dns feature
+    # (hickory-client/hickory-server), which Jay doesn't build.
+    "RUSTSEC-2026-0118",
+    "RUSTSEC-2026-0119",
+    "RUSTSEC-2026-0487",
+    "RUSTSEC-2026-0489",
+    "RUSTSEC-2026-0490",
+    "RUSTSEC-2026-0491",
 
     # --- In the build, reviewed, not reachable ---
     # quick-xml: only through plist in service-manager, which reads launchd plists when installing a
@@ -42,16 +51,4 @@ ignore = [
     "RUSTSEC-2026-0293",
     # zstd-sys: WebAssembly allocator shim only.
     "RUSTSEC-2026-0410",
-
-    # --- In the build, accepted for now ---
-    # hickory-proto 0.25: panics and memory amplification on malicious DNS answers. Fixed only in 0.26
-    # (breaking; upstream v2.7.0 is still on 0.25.2). Reached only for txt:// or srv:// peer URLs (Jay uses
-    # neither), or when a peer URL uses a host name and the system resolver fails. Jay builds no longer
-    # fall back to built-in public resolvers (easytier/src/common/dns.rs). DNSSEC (0118) and zone files (0490) are not used. Revisit on the next rebase.
-    "RUSTSEC-2026-0118",
-    "RUSTSEC-2026-0119",
-    "RUSTSEC-2026-0487",
-    "RUSTSEC-2026-0489",
-    "RUSTSEC-2026-0490",
-    "RUSTSEC-2026-0491",
 ]
