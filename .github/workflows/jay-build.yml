@@ -61,6 +61,8 @@ jobs:
           cargo test --locked -p easytier --no-default-features --features "$JAY_FEATURES" --lib -- \
             rpc_service::api::jay_rpc_portal_tests peers::encrypt common::dns::tests::jay \
             peers::peer_rpc_service::tests::jay connector::tests::jay connector::dns_connector::tests::jay \
+            peers::peer_conn::tests::jay peers::peer_conn::tests::peer_conn_secure_mode_server_accept_legacy_client \
+            peers::peer_conn::tests::peer_conn_secure_mode_different_network_name_ok \
             gateway::tcp_proxy::loopback_source_tests
 
       # A filter that matches nothing still passes, so check every filter above finds its tests.
@@ -73,7 +75,9 @@ jobs:
           }
           ok=1
           for filter in rpc_service::api::jay_rpc_portal_tests peers::encrypt common::dns::tests::jay \
-              peers::peer_rpc_service::tests::jay connector::tests::jay connector::dns_connector::tests::jay; do
+              peers::peer_rpc_service::tests::jay connector::tests::jay connector::dns_connector::tests::jay \
+              peers::peer_conn::tests::jay peers::peer_conn::tests::peer_conn_secure_mode_server_accept_legacy_client \
+              peers::peer_conn::tests::peer_conn_secure_mode_different_network_name_ok; do
             n=$(count "$filter"); echo "$filter: $n"
             [ "$n" -ge 1 ] || ok=0
           done

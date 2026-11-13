@@ -105,10 +105,7 @@ impl DnsTunnelConnector {
             dst_url.parse().with_context(|| {
                 format!(
                     "parse dst_url failed, protocol: {}, connector_dst: {}, port: {}, dst_url: {}",
-                    protocol,
-                    connector_dst,
-                    record.port,
-                    dst_url
+                    protocol, connector_dst, record.port, dst_url
                 )
             })?,
             record.priority as _,

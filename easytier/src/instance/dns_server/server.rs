@@ -19,7 +19,6 @@ use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tokio::task::JoinSet;
 
-
 use super::config::{GeneralConfig, Record, RunConfig};
 
 pub struct Server {
@@ -88,12 +87,11 @@ impl Server {
         }
 
         // use forwarder authority for the root zone
-        let system_conf =
-            read_system_conf().unwrap_or((
-                // Jay: no built-in public resolvers here either (see common/dns.rs).
-                hickory_resolver_v25::config::ResolverConfig::new(),
-                ResolverOpts::default(),
-            ));
+        let system_conf = read_system_conf().unwrap_or((
+            // Jay: no built-in public resolvers here either (see common/dns.rs).
+            hickory_resolver_v25::config::ResolverConfig::new(),
+            ResolverOpts::default(),
+        ));
         let forward_config = ForwardConfig {
             name_servers: system_conf
                 .0

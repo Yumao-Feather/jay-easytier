@@ -22,23 +22,22 @@ pub fn get_default_resolver_config() -> ResolverConfig {
 
 pub static ALLOW_USE_SYSTEM_DNS_RESOLVER: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(true));
 
-pub static RESOLVER: Lazy<Arc<Resolver<TokioRuntimeProvider>>> =
-    Lazy::new(|| {
-        let system_cfg = read_system_conf();
-        let mut cfg = get_default_resolver_config();
-        let mut opt = ResolverOpts::default();
-        if let Ok(s) = system_cfg {
-            for ns in s.0.name_servers() {
-                cfg.add_name_server(ns.clone());
-            }
-            opt = s.1;
+pub static RESOLVER: Lazy<Arc<Resolver<TokioRuntimeProvider>>> = Lazy::new(|| {
+    let system_cfg = read_system_conf();
+    let mut cfg = get_default_resolver_config();
+    let mut opt = ResolverOpts::default();
+    if let Ok(s) = system_cfg {
+        for ns in s.0.name_servers() {
+            cfg.add_name_server(ns.clone());
         }
-        opt.ip_strategy = LookupIpStrategy::Ipv4AndIpv6;
-        let builder = TokioResolver::builder_with_config(cfg, TokioRuntimeProvider::default())
-            .with_options(opt);
-        // build() only fails when a TLS transport is compiled in; this build has none.
-        Arc::new(builder.build().expect("plain UDP/TCP resolver builds"))
-    });
+        opt = s.1;
+    }
+    opt.ip_strategy = LookupIpStrategy::Ipv4AndIpv6;
+    let builder =
+        TokioResolver::builder_with_config(cfg, TokioRuntimeProvider::default()).with_options(opt);
+    // build() only fails when a TLS transport is compiled in; this build has none.
+    Arc::new(builder.build().expect("plain UDP/TCP resolver builds"))
+});
 
 /// The first string of the first TXT record among `answers`. Since hickory 0.26 a lookup returns
 /// every answer record (a CNAME chain can come first), so pick the TXT records out by type.

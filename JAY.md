@@ -33,7 +33,20 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
    hole-punch requests, makes no exception for peers that ask for p2p (`need_p2p`), and doesn't use
    STUN. (`easytier/src/peers/peer_rpc_service.rs`, `easytier/src/connector/`,
    `easytier/src/common/global_ctx.rs`)
-8. **Callers told apart on loopback (opt-in).** Without a TUN device, EasyTier hands a connection
+8. **Handshake reply no longer reveals the server's network name** (from upstream #2818, 3b32aaf). A node
+   used to put its own network name in the handshake reply to anyone who connected, before that peer
+   had proved it knows the secret, so a scanner could read which network a listener serves. Now only a
+   peer that already declared the same name gets it back; anyone else gets `fg-<their own name>`.
+   Limits: a peer can still confirm a guessed name (the reply echoes it unchanged, and in secure mode
+   comes with role_hint 1), so this only helps for names that can't be guessed. Jay's room names are
+   `amber-` plus 8 random characters from a 32-character alphabet (40 bits; the room secret is a
+   separate 12 characters, 60 bits), or, for wrapped rooms, derived with HKDF from that secret, so
+   guessing the name is as hard as guessing the secret. Each guess costs a full connection and
+   handshake. The public network's name is public anyway. Nodes that haven't upgraded
+   still reveal their name. Only the handshake reply changed: the client still sends its own name in
+   its first message, as it must.
+   (`easytier/src/peers/peer_conn.rs`)
+9. **Callers told apart on loopback (opt-in).** Without a TUN device, EasyTier hands a connection
    for its own virtual address to the local service on `127.0.0.1`. With `JAY_ET_LOOPBACK_SOURCE`
    set to exactly `1`, TCP connections handed to a local service on loopback are bound to a stand-in
    for the caller instead:
@@ -53,7 +66,7 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
    UDP is unchanged. The public network (`10.235.0.0/16`) is fixed here and must match Jay's
    `PublicNetworkProfile.Subnet`. Off by default. (`easytier/src/gateway/tcp_proxy.rs`,
    `quic_proxy.rs`, `kcp_proxy.rs`)
-9. **Build hygiene** (`.github/workflows/jay-build.yml`):
+10. **Build hygiene** (`.github/workflows/jay-build.yml`):
    - The build runs with `--locked`, and `cargo audit` runs on every build. Any advisory not reviewed
      in `.cargo/audit.toml` fails the build, so no release goes out with an unreviewed advisory.
    - Every GitHub Action is pinned to a commit hash.
@@ -91,6 +104,10 @@ are only taken when Jay needs them. Watch the EasyTier repo's releases and the R
   (not in Jay's build) stays on hickory 0.25, through the renamed `hickory-proto-v25` and
   `hickory-resolver-v25` packages, because hickory-client has no 0.26 release yet. On the next rebase,
   move magic-dns to 0.26 too if upstream has, and drop the renamed packages.
+- **jay-v2.6.4-5** (pending). Checked upstream up to main 3b32aaf (2026-11-12). Ported #2818 (patch 8). Not
+  applicable: web console heartbeat fixes (#2718, no config server), http(s) discovery changes (#2748,
+  #2783, removed by patch 4), BufPool fixes (#2634) and the Rust 1.95 NIC workaround (#2703), whose code
+  isn't in v2.6.4.
 
 ## Updating to a new upstream version
 
