@@ -33,7 +33,12 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
    hole-punch requests, makes no exception for peers that ask for p2p (`need_p2p`), and doesn't use
    STUN. (`easytier/src/peers/peer_rpc_service.rs`, `easytier/src/connector/`,
    `easytier/src/common/global_ctx.rs`)
-8. **Build hygiene** (`.github/workflows/jay-build.yml`):
+8. **Network name not revealed to other networks** (from upstream #2818). A node used to send its own
+   network name in its handshake reply to anyone who connected, before that peer had proved it knows
+   the secret, so a scanner could learn which network a listener serves. Now only a peer that already
+   declared the same name gets it back; anyone else gets `fg-<their own name>`.
+   (`easytier/src/peers/peer_conn.rs`)
+9. **Build hygiene** (`.github/workflows/jay-build.yml`):
    - The build runs with `--locked`, and `cargo audit` runs on every build. Any advisory not reviewed
      in `.cargo/audit.toml` fails the build, so no release goes out with an unreviewed advisory.
    - Every GitHub Action is pinned to a commit hash.
@@ -71,6 +76,10 @@ are only taken when Jay needs them. Watch the EasyTier repo's releases and the R
   (not in Jay's build) stays on hickory 0.25, through the renamed `hickory-proto-v25` and
   `hickory-resolver-v25` packages, because hickory-client has no 0.26 release yet. On the next rebase,
   move magic-dns to 0.26 too if upstream has, and drop the renamed packages.
+- **jay-v2.6.4-5** (pending). Checked upstream up to main 3b32aaf (2026-11-12). Ported #2818 (patch 8). Not
+  applicable: web console heartbeat fixes (#2718, no config server), http(s) discovery changes (#2748,
+  #2783, removed by patch 4), BufPool fixes (#2634) and the Rust 1.95 NIC workaround (#2703), whose code
+  isn't in v2.6.4.
 
 ## Updating to a new upstream version
 

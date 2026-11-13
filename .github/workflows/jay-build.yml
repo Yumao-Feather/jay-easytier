@@ -57,7 +57,8 @@ jobs:
         run: |
           cargo test --locked -p easytier --no-default-features --features "$JAY_FEATURES" --lib -- \
             rpc_service::api::jay_rpc_portal_tests peers::encrypt common::dns::tests::jay \
-            peers::peer_rpc_service::tests::jay connector::tests::jay connector::dns_connector::tests::jay
+            peers::peer_rpc_service::tests::jay connector::tests::jay connector::dns_connector::tests::jay \
+            peers::peer_conn::tests::jay
 
       # Fails the build (and so the release) on any advisory not reviewed in .cargo/audit.toml.
       # 0.21.x can't read the current advisory database, so it must be 0.22 or later.
