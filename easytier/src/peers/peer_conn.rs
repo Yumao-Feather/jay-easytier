@@ -1291,8 +1291,7 @@ impl PeerConn {
             // Same rule as the noise msg2 path (see network_name_for_reply).
             let my_name = self.global_ctx.get_network_identity().network_name;
             let peer_name = self.get_network_identity().network_name;
-            let reply_name = Self::network_name_for_reply(&my_name, &peer_name);
-            let reply_name = (reply_name != my_name).then_some(reply_name);
+            let reply_name = Some(Self::network_name_for_reply(&my_name, &peer_name));
             self.send_handshake(
                 send_digest,
                 &self.get_network_identity().network_name,
@@ -1901,8 +1900,11 @@ pub mod tests {
     /// never with its own network name; a peer that declared the right name gets it back.
     #[tokio::test]
     async fn jay_handshake_hides_network_name_from_foreign_peers() {
+        // A secure-mode client can't connect to a plain server at all (the handshake times out,
+        // as before this change), so (true, false) has nothing to check.
         for (client_secure, server_secure) in [(false, false), (false, true), (true, true)] {
-            for (client_name, expected) in [("foreign", "fg-foreign"), ("", "fg-"), ("net", "net")] {
+            for (client_name, expected) in [("foreign", "fg-foreign"), ("", "fg-"), ("net", "net")]
+            {
                 let (c, s) = create_ring_tunnel_pair();
                 let c_ctx = get_mock_global_ctx();
                 let s_ctx = get_mock_global_ctx();
@@ -1910,9 +1912,10 @@ pub mod tests {
                     client_name.to_string(),
                     "secret".to_string(),
                 ));
-                s_ctx
-                    .config
-                    .set_network_identity(NetworkIdentity::new("net".to_string(), "secret".to_string()));
+                s_ctx.config.set_network_identity(NetworkIdentity::new(
+                    "net".to_string(),
+                    "secret".to_string(),
+                ));
                 set_secure_mode_cfg(&c_ctx, client_secure);
                 set_secure_mode_cfg(&s_ctx, server_secure);
 
@@ -1927,8 +1930,66 @@ pub mod tests {
                 s_ret.unwrap();
 
                 let case = format!("client={client_name:?} secure={client_secure}/{server_secure}");
-                assert_eq!(c_peer.get_network_identity().network_name, expected, "{case}");
-                assert_eq!(s_peer.get_network_identity().network_name, client_name, "{case}");
+                assert_eq!(
+                    c_peer.get_network_identity().network_name,
+                    expected,
+                    "{case}"
+                );
+                assert_eq!(
+                    s_peer.get_network_identity().network_name,
+                    client_name,
+                    "{case}"
+                );
+            }
+        }
+    }
+
+    /// Jay: the plain handshake reply sent to a foreign peer doesn't carry the server's name on the
+    /// wire, and a server whose real name happens to be "fg-<claimed>" answers with the same echo
+    /// as any other server, so the echo tells the peer nothing.
+    #[tokio::test]
+    async fn jay_handshake_reply_bytes_hold_no_server_name() {
+        for (server_name, client_name) in [
+            ("jay-hidden-net-7f3a", "foreign"),
+            ("fg-foreign", "foreign"),
+        ] {
+            let (c, s) = create_ring_tunnel_pair();
+            let s_recorder = Arc::new(PacketRecorderTunnelFilter::new());
+            let s = TunnelWithFilter::new(s, s_recorder.clone());
+            let c_ctx = get_mock_global_ctx();
+            let s_ctx = get_mock_global_ctx();
+            c_ctx.config.set_network_identity(NetworkIdentity::new(
+                client_name.to_string(),
+                "secret".to_string(),
+            ));
+            s_ctx.config.set_network_identity(NetworkIdentity::new(
+                server_name.to_string(),
+                "secret".to_string(),
+            ));
+
+            let ps = Arc::new(PeerSessionStore::new());
+            let mut c_peer = PeerConn::new(new_peer_id(), c_ctx, Box::new(c), ps.clone());
+            let mut s_peer = PeerConn::new(new_peer_id(), s_ctx, Box::new(s), ps.clone());
+            let (c_ret, s_ret) = tokio::join!(
+                c_peer.do_handshake_as_client(),
+                s_peer.do_handshake_as_server()
+            );
+            c_ret.unwrap();
+            s_ret.unwrap();
+
+            assert_eq!(c_peer.get_network_identity().network_name, "fg-foreign");
+            if server_name != "fg-foreign" {
+                let sent = s_recorder.sent.lock().unwrap();
+                assert!(!sent.is_empty());
+                for pkt in sent.iter() {
+                    let bytes = pkt.payload();
+                    assert!(
+                        !bytes
+                            .windows(server_name.len())
+                            .any(|w| w == server_name.as_bytes()),
+                        "server name found in the handshake reply"
+                    );
+                }
             }
         }
     }

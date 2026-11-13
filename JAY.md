@@ -33,10 +33,15 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
    hole-punch requests, makes no exception for peers that ask for p2p (`need_p2p`), and doesn't use
    STUN. (`easytier/src/peers/peer_rpc_service.rs`, `easytier/src/connector/`,
    `easytier/src/common/global_ctx.rs`)
-8. **Network name not revealed to other networks** (from upstream #2818). A node used to send its own
-   network name in its handshake reply to anyone who connected, before that peer had proved it knows
-   the secret, so a scanner could learn which network a listener serves. Now only a peer that already
-   declared the same name gets it back; anyone else gets `fg-<their own name>`.
+8. **Handshake reply no longer reveals the server's network name** (from upstream #2818, 3b32aaf). A node
+   used to put its own network name in the handshake reply to anyone who connected, before that peer
+   had proved it knows the secret, so a scanner could read which network a listener serves. Now only a
+   peer that already declared the same name gets it back; anyone else gets `fg-<their own name>`.
+   Limits: a peer can still confirm a guessed name (the reply echoes it unchanged, and in secure mode
+   comes with role_hint 1), so this only helps for names that can't be guessed. Jay's room names are
+   random or derived with HKDF; the public network's name is public anyway. Nodes that haven't upgraded
+   still reveal their name. Only the handshake reply changed: the client still sends its own name in
+   its first message, as it must.
    (`easytier/src/peers/peer_conn.rs`)
 9. **Build hygiene** (`.github/workflows/jay-build.yml`):
    - The build runs with `--locked`, and `cargo audit` runs on every build. Any advisory not reviewed
