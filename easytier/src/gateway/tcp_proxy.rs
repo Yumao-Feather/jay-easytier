@@ -95,63 +95,53 @@ pub(crate) fn loopback_source_for(src: SocketAddr) -> std::net::Ipv4Addr {
     SHARED_LOOPBACK_SOURCE
 }
 
-/// The public-network address whose stand-in (see [`loopback_source_for`]) is `peer`'s own:
-/// 10.235.c.d with c.d from a keyed hash of the peer id, never the network, broadcast or
-/// directory address. The key is random per process, so no peer can pick a peer id that lands on
-/// a chosen caller's stand-in; two peers can still share one by chance (1 in 65533). The address
-/// stands for the peer only to tell callers apart; it is not the peer's own address.
-pub(crate) fn peer_source(peer: crate::common::PeerId) -> std::net::Ipv4Addr {
+/// A key for the sender behind an authenticated connection: a keyed hash of the static public key
+/// its secure-mode (Noise) handshake proved. The hash key is random per process, so no one can
+/// pick a key that lands on a chosen caller's stand-in.
+pub(crate) fn sender_key(static_pubkey: &[u8]) -> u64 {
     static KEY: std::sync::OnceLock<std::collections::hash_map::RandomState> =
         std::sync::OnceLock::new();
-    peer_source_keyed(
+    sender_key_with(
         KEY.get_or_init(std::collections::hash_map::RandomState::new),
-        peer,
+        static_pubkey,
     )
 }
 
-/// [`peer_source`] under the given hash key (tests use a fixed one).
-fn peer_source_keyed(
-    key: &impl std::hash::BuildHasher,
-    peer: crate::common::PeerId,
-) -> std::net::Ipv4Addr {
-    let hash = key.hash_one(peer);
+/// [`sender_key`] under the given hash key (tests use a fixed one).
+fn sender_key_with(key: &impl std::hash::BuildHasher, static_pubkey: &[u8]) -> u64 {
+    key.hash_one(static_pubkey)
+}
+
+/// The public-network address whose stand-in (see [`loopback_source_for`]) is `sender`'s own:
+/// 10.235.c.d with c.d from the sender key, never the network, broadcast or directory address.
+/// Two senders share one only by chance (1 in 65533). It only tells callers apart; it is not the
+/// caller's address.
+pub(crate) fn sender_source(sender: u64) -> std::net::Ipv4Addr {
     // 2..=65534: skips .0.0, .0.1 and .255.255.
-    let n = (hash % 65533) as u16 + 2;
+    let n = (sender % 65533) as u16 + 2;
     let [c, d] = n.to_be_bytes();
     std::net::Ipv4Addr::new(PUBLIC_NETWORK[0], PUBLIC_NETWORK[1], c, d)
 }
 
-/// The source a stream from `from_peer` is given (the caller's own `claimed` address is not
-/// used): [`peer_source`] of the sending peer when the route table knows that peer, and
-/// [`UNCONFIRMED_SOURCE`] otherwise. Route entries aren't signed by the peer they describe, so the
-/// address a peer declares can't decide whose stand-in a caller gets; the peer id can. `from_peer`
-/// must be a sender the receive path checked (`ZCPacket::verified_from` for TCP, the QUIC
-/// connection's peer for QUIC), never the bare peer id from a packet header. With the switch off,
-/// `claimed` is returned unchanged.
-pub(crate) async fn confirmed_source(
-    route: &(dyn crate::peers::route_trait::Route + Send + Sync),
-    from_peer: Option<crate::common::PeerId>,
-    claimed: SocketAddr,
-) -> SocketAddr {
-    if !loopback_source_enabled() {
-        return claimed;
-    }
-    let known = match from_peer {
-        Some(peer) => route.get_peer_info(peer).await.is_some(),
-        None => false,
-    };
-    source_of(from_peer.filter(|_| known), claimed)
+/// The source a stream is given when the switch is on (with it off, `claimed` unchanged; see
+/// [`confirmed_source_with`]).
+pub(crate) fn confirmed_source(sender: Option<u64>, claimed: SocketAddr) -> SocketAddr {
+    confirmed_source_with(loopback_source_enabled(), sender, claimed)
 }
 
-/// [`peer_source`] of `known_peer` (a sending peer the route table knows), keeping `claimed`'s
-/// port, or [`UNCONFIRMED_SOURCE`] without one. `claimed`'s address is never used.
-pub(crate) fn source_of(
-    known_peer: Option<crate::common::PeerId>,
+/// With `enabled`: [`sender_source`] of `sender`, keeping `claimed`'s port, when the stream came
+/// over an authenticated secure-mode connection with its sender (`ZCPacket::verified_sender`), and
+/// [`UNCONFIRMED_SOURCE`] otherwise. The caller's own `claimed` address, the peer id in a packet
+/// header and the route table never decide it. Without `enabled`: `claimed` unchanged.
+pub(crate) fn confirmed_source_with(
+    enabled: bool,
+    sender: Option<u64>,
     claimed: SocketAddr,
 ) -> SocketAddr {
-    match known_peer {
-        Some(peer) => SocketAddr::new(IpAddr::V4(peer_source(peer)), claimed.port()),
-        None => UNCONFIRMED_SOURCE,
+    match (enabled, sender) {
+        (false, _) => claimed,
+        (true, Some(sender)) => SocketAddr::new(IpAddr::V4(sender_source(sender)), claimed.port()),
+        (true, None) => UNCONFIRMED_SOURCE,
     }
 }
 
@@ -247,33 +237,38 @@ mod loopback_source_tests {
     }
 
     #[test]
-    fn each_peer_gets_its_own_public_network_source() {
+    fn each_sender_gets_its_own_public_network_source() {
         // A fixed key, so the result doesn't depend on chance.
         let key =
             std::hash::BuildHasherDefault::<std::collections::hash_map::DefaultHasher>::default();
         let mut seen = std::collections::HashSet::new();
-        for peer in 0..2000u32 {
-            let ip = peer_source_keyed(&key, peer);
+        for n in 0..2000u32 {
+            let pubkey = [n.to_le_bytes(); 8].concat();
+            let ip = sender_source(sender_key_with(&key, &pubkey));
             let [a, b, c, d] = ip.octets();
             assert_eq!([a, b], PUBLIC_NETWORK);
             assert!(!matches!((c, d), (0, 0) | (0, 1) | (255, 255)), "{ip}");
-            // Stable for a peer, and maps to a stand-in of its own (not the shared one).
-            assert_eq!(peer_source(peer), peer_source(peer));
-            assert_eq!(peer_source_keyed(&key, peer), ip);
+            // Stable for a key, and maps to a stand-in of its own (not the shared one).
+            assert_eq!(sender_key(&pubkey), sender_key(&pubkey));
             assert_eq!(
                 loopback_source_for(SocketAddr::new(IpAddr::V4(ip), 1)),
                 std::net::Ipv4Addr::new(127, b, c, d)
             );
             seen.insert(ip);
         }
-        // Different peers almost always get different sources (a few chance collisions at most).
+        // Different keys almost always get different sources (a few chance collisions at most).
         assert!(seen.len() > 1950, "{}", seen.len());
+        // The edges of the range stay clear of the reserved addresses.
+        for sender in [0, 1, 65532, 65533, u64::MAX] {
+            let [_, _, c, d] = sender_source(sender).octets();
+            assert!(!matches!((c, d), (0, 0) | (0, 1) | (255, 255)), "{sender}");
+        }
     }
 
     #[test]
-    fn the_source_follows_the_sending_peer_not_the_claimed_address() {
-        // Peer 7 claiming any address, another peer's included, gets its own source.
-        let own = SocketAddr::new(IpAddr::V4(peer_source(7)), 4000);
+    fn the_source_follows_the_checked_sender_only() {
+        let own = SocketAddr::new(IpAddr::V4(sender_source(7)), 4000);
+        // A checked sender claiming any address, another caller's included, gets its own source.
         for claimed in [
             "10.235.4.7:4000",
             "10.235.4.8:4000",
@@ -281,20 +276,24 @@ mod loopback_source_tests {
             "0.0.0.0:4000",
         ] {
             assert_eq!(
-                source_of(Some(7), claimed.parse().unwrap()),
+                confirmed_source_with(true, Some(7), claimed.parse().unwrap()),
                 own,
                 "{claimed}"
             );
         }
-        // No known sending peer: the shared stand-in, whatever it claims.
+        // No checked sender (legacy connection, relayed, QUIC, KCP): the shared stand-in.
+        let claimed: SocketAddr = "10.235.4.7:4000".parse().unwrap();
         assert_eq!(
-            source_of(None, "10.235.4.7:4000".parse().unwrap()),
+            confirmed_source_with(true, None, claimed),
             UNCONFIRMED_SOURCE
         );
         assert_eq!(
-            loopback_source_for(source_of(None, "10.235.4.7:4000".parse().unwrap())),
+            loopback_source_for(confirmed_source_with(true, None, claimed)),
             SHARED_LOOPBACK_SOURCE
         );
+        // Switch off: unchanged, whatever the sender.
+        assert_eq!(confirmed_source_with(false, Some(7), claimed), claimed);
+        assert_eq!(confirmed_source_with(false, None, claimed), claimed);
     }
 
     #[test]
@@ -423,9 +422,9 @@ type NatDstEntryState = TcpProxyEntryState;
 pub struct NatDstEntry {
     id: uuid::Uuid,
     src: SocketAddr,
-    /// Jay: the peer id the SYN came from, to confirm `src` before a TCP connection to a local
-    /// service (see [`confirmed_source`]).
-    from_peer: Option<crate::common::PeerId>,
+    /// Jay: the checked sender of the SYN (`ZCPacket::verified_sender`), which decides the
+    /// stand-in for a TCP connection to a local service (see [`confirmed_source`]).
+    sender: Option<u64>,
     real_dst: SocketAddr,
     mapped_dst: SocketAddr,
     start_time: Instant,
@@ -439,7 +438,7 @@ impl NatDstEntry {
         Self {
             id: uuid::Uuid::new_v4(),
             src,
-            from_peer: None,
+            sender: None,
             real_dst,
             mapped_dst,
             start_time: Instant::now(),
@@ -966,7 +965,6 @@ impl<C: NatDstConnector> TcpProxy<C> {
         let conn_map = self.conn_map.clone();
         let addr_conn_map = self.addr_conn_map.clone();
         let connector = self.connector.clone();
-        let peer_mgr = self.peer_manager.clone();
         let accept_task = async move {
             let conn_map = conn_map.clone();
             loop {
@@ -1020,7 +1018,6 @@ impl<C: NatDstConnector> TcpProxy<C> {
 
                 tasks.lock().unwrap().spawn(Self::connect_to_nat_dst(
                     connector.clone(),
-                    peer_mgr.clone(),
                     global_ctx.clone(),
                     tcp_stream,
                     conn_map.clone(),
@@ -1054,7 +1051,6 @@ impl<C: NatDstConnector> TcpProxy<C> {
 
     async fn connect_to_nat_dst(
         connector: C,
-        peer_mgr: Weak<PeerManager>,
         global_ctx: ArcGlobalCtx,
         src_tcp_stream: ProxyTcpStream,
         conn_map: ConnSockMap,
@@ -1105,13 +1101,7 @@ impl<C: NatDstConnector> TcpProxy<C> {
             connector.transport_type(),
             nat_dst,
         ) {
-            match peer_mgr.upgrade() {
-                Some(peer_manager) => {
-                    let route = peer_manager.get_route();
-                    confirmed_source(route.as_ref(), nat_entry.from_peer, nat_entry.src).await
-                }
-                None => UNCONFIRMED_SOURCE,
-            }
+            confirmed_source(nat_entry.sender, nat_entry.src)
         } else {
             nat_entry.src
         };
@@ -1247,9 +1237,9 @@ impl<C: NatDstConnector> TcpProxy<C> {
             ipv4.get_destination()
         };
         let mut real_dst_ip = origin_ip;
-        // Jay: the sending peer, only when the receive path checked it (see
-        // `ZCPacket::verified_from`); the peer id in the header alone isn't proof.
-        let from_peer = packet.verified_from();
+        // Jay: the sender, only when the receive path checked it (see
+        // `ZCPacket::verified_sender`); the peer id in the header isn't proof.
+        let sender = packet.verified_sender();
         let hdr = packet.mut_peer_manager_header().unwrap();
 
         if !self.connector.check_packet_from_peer(
@@ -1284,7 +1274,7 @@ impl<C: NatDstConnector> TcpProxy<C> {
             let real_dst = SocketAddr::V4(SocketAddrV4::new(real_dst_ip, dest_port));
 
             let mut entry = NatDstEntry::new(src, real_dst, mapped_dst);
-            entry.from_peer = from_peer;
+            entry.sender = sender;
             let old_val = self.syn_map.insert(src, Arc::new(entry));
             tracing::info!(src = ?src, ?real_dst, ?mapped_dst, old_entry = ?old_val, "tcp syn received");
 

@@ -48,25 +48,23 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
    for its own virtual address to the local service on `127.0.0.1`. With `JAY_ET_LOOPBACK_SOURCE`
    set to exactly `1`, TCP connections handed to a local service on loopback are bound to a stand-in
    for the caller instead:
-   - `127.235.c.d` of the sending peer's own, picked by the peer id (a keyed hash, with a random key
-     per process), when the sender was checked and the route table knows it. For TCP the sender is
-     checked when the packet came straight over a connection with that peer and names it, or was
-     decrypted with that peer's end-to-end session (secure mode); for QUIC it is the QUIC
-     connection's peer. The address a peer declares in the route table isn't used, and neither are
-     the caller's own source address or the peer id in a packet header alone;
-   - the one shared address `127.255.255.254` for everything else: an unchecked sender (for example
-     traffic relayed through another peer without secure mode), a peer the route table doesn't
-     know yet, and every KCP-proxied stream (Jay's builds don't include KCP).
-   `c.d` is never `0.0`, `0.1` or `255.255`. Two peers share a stand-in only by chance (1 in 65533).
+   - `127.235.c.d` of the sender's own when the connection came straight over a secure-mode
+     connection with that sender: picked by a keyed hash (random key per process) of the static
+     public key its Noise handshake proved, and only for packets that name that connection's peer
+     as their sender and are addressed to this node (the session decrypts every such packet);
+   - the one shared address `127.255.255.254` for everything else: legacy (non-secure) connections,
+     traffic relayed through another peer, QUIC- and KCP-proxied streams (Jay's builds don't
+     include KCP). The address a peer declares in the route table, the caller's own source address
+     and the peer id in a packet header never decide the stand-in.
+   `c.d` is never `0.0`, `0.1` or `255.255`. Two senders share a stand-in only by chance (1 in 65533).
    No remote TCP caller arrives as `127.0.0.1`. If the bind fails, the connection is refused rather
    than going out unbound, so leave the switch off where only `127.0.0.1` exists (macOS). While the
    switch is on, failed proxied connections (TCP and QUIC) are logged at most once a minute (the
-   rest at debug). A connection's peer id is the one its handshake gave. The stand-in tells
-   callers apart for rate limits; it is not an identity, and it doesn't match the caller's address.
+   rest at debug). Anyone can make new keys, so the stand-in only tells callers apart for
+   rate limits; it is not an identity, and it doesn't match the caller's address.
    UDP is unchanged. The public network (`10.235.0.0/16`) is fixed here and must match Jay's
    `PublicNetworkProfile.Subnet`. Off by default. (`easytier/src/gateway/tcp_proxy.rs`,
-   `quic_proxy.rs`, `kcp_proxy.rs`, `peers/peer_conn.rs`, `peers/peer_manager.rs`,
-   `tunnel/packet_def.rs`)
+   `quic_proxy.rs`, `kcp_proxy.rs`, `peers/peer_conn.rs`, `tunnel/packet_def.rs`)
 10. **Build hygiene** (`.github/workflows/jay-build.yml`):
    - The build runs with `--locked`, and `cargo audit` runs on every build. Any advisory not reviewed
      in `.cargo/audit.toml` fails the build, so no release goes out with an unreviewed advisory.

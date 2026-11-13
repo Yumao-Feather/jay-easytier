@@ -612,9 +612,6 @@ impl QuicStreamReceiver {
                     };
 
                     let ctx = self.ctx.clone();
-                    // Jay: the peer that opened this connection (its address carries the sending
-                    // peer id from the packet header), to confirm the source it claims.
-                    let from_peer = QuicAddr::try_from(addr).ok().map(|a| a.peer_id);
                     self.tasks.spawn(async move {
                         let mut tasks = JoinSet::new();
                         loop {
@@ -637,7 +634,7 @@ impl QuicStreamReceiver {
 
                                     let ctx = ctx.clone();
                                     tasks.spawn(async move {
-                                        match Self::establish_stream(stream, ctx, from_peer).await {
+                                        match Self::establish_stream(stream, ctx).await {
                                             Ok(transfer_fut) => {
                                                 if let Err(e) = transfer_fut.await {
                                                     warn!("quic stream transfer error: {:?}", e);
@@ -703,7 +700,6 @@ impl QuicStreamReceiver {
     async fn establish_stream(
         mut stream: QuicStream,
         ctx: Arc<QuicStreamContext>,
-        from_peer: Option<PeerId>,
     ) -> Result<impl Future<Output = crate::common::error::Result<()>>, Error> {
         let conn_data = Self::read_stream_header(&mut stream).await?;
         let conn_data_parsed = QuicConnData::decode(conn_data.as_ref())
@@ -788,15 +784,13 @@ impl QuicStreamReceiver {
 
         debug!("quic connect to dst socket: {:?}", dst_socket);
 
-        // Jay: confirm the claimed source (only matters for a local service on loopback), before
-        // entering the network namespace.
+        // Jay: a QUIC stream's sender isn't checked against an authenticated connection, so with
+        // the switch on a local service on loopback sees it as the one shared stand-in.
         let src = if dst_socket.ip().is_loopback() {
             crate::gateway::tcp_proxy::confirmed_source(
-                route.as_ref(),
-                from_peer,
+                None,
                 SocketAddr::new(src_ip, src_socket.port()),
             )
-            .await
         } else {
             SocketAddr::new(src_ip, src_socket.port())
         };

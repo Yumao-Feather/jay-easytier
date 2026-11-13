@@ -453,10 +453,9 @@ impl ZCPacketType {
 pub struct ZCPacket {
     inner: BytesMut,
     packet_type: ZCPacketType,
-    /// Jay: the peer this packet is known to come from, set only where that was checked against
-    /// an authenticated connection or session (see [`ZCPacket::verified_from`]). Any packet built
-    /// anew starts without it.
-    verified_from: Option<u32>,
+    /// Jay: the sender this packet is known to come from (see [`ZCPacket::verified_sender`]).
+    /// Any packet built anew starts without it.
+    verified_sender: Option<u64>,
 }
 
 impl ZCPacket {
@@ -472,7 +471,7 @@ impl ZCPacket {
         Self {
             inner: BytesMut::new(),
             packet_type: ZCPacketType::NIC,
-            verified_from: None,
+            verified_sender: None,
         }
     }
 
@@ -480,20 +479,21 @@ impl ZCPacket {
         Self {
             inner: buf,
             packet_type,
-            verified_from: None,
+            verified_sender: None,
         }
     }
 
-    /// Jay: the sending peer, when it was checked: the packet came straight over a connection with
-    /// that peer and names it as the sender, or a relayed packet was decrypted with the end-to-end
-    /// session of the peer it names. `None` for anything else.
-    pub fn verified_from(&self) -> Option<u32> {
-        self.verified_from
+    /// Jay: the sender's key (`gateway::tcp_proxy::sender_key` of its static public key), set only
+    /// when the packet came straight over an authenticated secure-mode connection and names that
+    /// connection's peer as its sender. `None` for anything else: legacy connections, relayed or
+    /// rebuilt packets.
+    pub fn verified_sender(&self) -> Option<u64> {
+        self.verified_sender
     }
 
-    /// Jay: records that the packet was checked to come from `peer` (see [`Self::verified_from`]).
-    pub fn set_verified_from(&mut self, peer: Option<u32>) {
-        self.verified_from = peer;
+    /// Jay: records the checked sender (see [`Self::verified_sender`]).
+    pub fn set_verified_sender(&mut self, sender: Option<u64>) {
+        self.verified_sender = sender;
     }
 
     pub fn new_with_payload(payload: &[u8]) -> Self {

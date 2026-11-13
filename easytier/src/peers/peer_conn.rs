@@ -1374,11 +1374,23 @@ impl PeerConn {
 
         let is_foreign_network = conn_info_for_instrument.network_name
             != self.global_ctx.get_network_identity().network_name;
-        // Jay: packets that name this connection's own peer as their sender are known to come from
-        // it (relayed ones name another peer); only for this node's own network.
-        let conn_peer = (!is_foreign_network)
-            .then(|| self.info.as_ref().map(|info| info.my_peer_id))
-            .flatten();
+        // Jay: on a secure-mode connection in this node's own network, packets that name the
+        // connection's peer as their sender come from the holder of the static key its handshake
+        // proved (the session filter decrypts every such packet). Legacy connections prove no key.
+        let my_peer_id = self.session_filter.my_peer_id.clone();
+        let conn_sender = if is_foreign_network {
+            None
+        } else {
+            self.noise_handshake_result
+                .as_ref()
+                .filter(|noise| noise.remote_static_pubkey.len() == 32)
+                .map(|noise| {
+                    (
+                        noise.peer_id,
+                        crate::gateway::tcp_proxy::sender_key(&noise.remote_static_pubkey),
+                    )
+                })
+        };
         let recv_limiter = if is_foreign_network
             && self.global_ctx.get_flags().foreign_relay_bps_limit != u64::MAX
         {
@@ -1442,8 +1454,14 @@ impl PeerConn {
                             tracing::error!(?e, "peer conn send ctrl resp error");
                         }
                     } else {
+                        // Only packets addressed to this node are decrypted on the way in.
                         let from = peer_mgr_hdr.from_peer_id.get();
-                        zc_packet.set_verified_from(conn_peer.filter(|peer| *peer == from));
+                        let to_me = peer_mgr_hdr.to_peer_id.get() == my_peer_id.load();
+                        zc_packet.set_verified_sender(
+                            conn_sender
+                                .filter(|(peer, _)| *peer == from && to_me)
+                                .map(|(_, key)| key),
+                        );
                         if sender.send(zc_packet).await.is_err() {
                             break;
                         }
@@ -2098,8 +2116,9 @@ pub mod tests {
         assert_eq!(s_peer.get_conn_info().network_name, "user".to_string());
     }
 
-    /// Jay: a packet is marked as coming from the connection's peer only when it names that peer as
-    /// its sender; a packet naming another peer (relayed, or forged) is not marked.
+    /// Jay: a packet is marked with its sender only on a secure-mode connection, and only when it
+    /// names the connection's peer as its sender; a packet naming another peer (relayed, or forged)
+    /// and every packet on a legacy connection are not marked.
     async fn jay_verified_sender(secure: bool) {
         let (c, s) = create_ring_tunnel_pair();
         let c_peer_id = new_peer_id();
@@ -2117,11 +2136,16 @@ pub mod tests {
         );
         c_ret.unwrap();
         s_ret.unwrap();
+        let c_key = secure.then(|| {
+            crate::gateway::tcp_proxy::sender_key(
+                &s_peer.get_conn_info().noise_remote_static_pubkey,
+            )
+        });
         let (packet_send, mut packet_recv) = create_packet_recv_chan();
         s_peer.start_recv_loop(packet_send).await;
 
         let other_peer_id = c_peer_id.wrapping_add(1);
-        for (from, expected) in [(c_peer_id, Some(c_peer_id)), (other_peer_id, None)] {
+        for (from, expected) in [(c_peer_id, c_key), (other_peer_id, None)] {
             let mut pkt = ZCPacket::new_with_payload(b"jay");
             pkt.fill_peer_manager_hdr(from, s_peer_id, PacketType::Data as u8);
             c_peer.send_msg(pkt).await.unwrap();
@@ -2133,8 +2157,13 @@ pub mod tests {
             .unwrap()
             .unwrap();
             assert_eq!(got.get_src_peer_id(), Some(from));
-            assert_eq!(got.verified_from(), expected, "secure={secure} from={from}");
+            assert_eq!(
+                got.verified_sender(),
+                expected,
+                "secure={secure} from={from}"
+            );
         }
+        assert_eq!(c_key.is_some(), secure);
     }
 
     #[tokio::test]
