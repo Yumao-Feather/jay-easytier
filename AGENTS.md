@@ -45,5 +45,5 @@ This repository is public. Maintainers run a separate, private security review f
 Flag as blocking anything in the diff, the commit messages or the pull request text that contains:
 
 - a public IP address (use `example.org`, `192.0.2.x`, `198.51.100.x`, `203.0.113.x` or `2001:db8::` in tests and docs),
-- an email address, a real name, a computer user name or host name, or a machine-specific absolute path,
+- an email address (no-reply addresses in commit attribution trailers, such as `noreply@anthropic.com` or `…@users.noreply.github.com`, are fine), a real name, a computer user name or host name, or a machine-specific absolute path,
 - a key, token, password or other secret.
