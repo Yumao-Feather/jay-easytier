@@ -791,11 +791,9 @@ impl QuicStreamReceiver {
         // Jay: confirm the claimed source (only matters for a local service on loopback), before
         // entering the network namespace.
         let src = if dst_socket.ip().is_loopback() {
-            let me = global_ctx.get_ipv4().map(|inet| inet.address());
             crate::gateway::tcp_proxy::confirmed_source(
                 route.as_ref(),
                 from_peer,
-                me,
                 SocketAddr::new(src_ip, src_socket.port()),
             )
             .await

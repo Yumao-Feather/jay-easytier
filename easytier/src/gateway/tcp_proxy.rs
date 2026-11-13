@@ -95,68 +95,56 @@ pub(crate) fn loopback_source_for(src: SocketAddr) -> std::net::Ipv4Addr {
     SHARED_LOOPBACK_SOURCE
 }
 
-/// The caller's source if it is the address its sending peer declared in the route table and
-/// no other peer (this node included) declares it too; [`UNCONFIRMED_SOURCE`] otherwise.
-/// `declared` is the peer's own address from the route table, `holders` how many declare
-/// `claimed`'s address.
-pub(crate) fn confirm_source(
-    claimed: SocketAddr,
-    declared: Option<std::net::Ipv4Addr>,
-    holders: usize,
-) -> SocketAddr {
-    match claimed.ip().to_canonical() {
-        IpAddr::V4(ip) if declared == Some(ip) && holders == 1 => {
-            SocketAddr::new(IpAddr::V4(ip), claimed.port())
-        }
-        _ => UNCONFIRMED_SOURCE,
-    }
+/// The public-network address whose stand-in (see [`loopback_source_for`]) is `peer`'s own:
+/// 10.235.c.d with c.d from a keyed hash of the peer id, never the network, broadcast or
+/// directory address. The key is random per process, so no peer can pick a peer id that lands on
+/// a chosen caller's stand-in; two peers can still share one by chance (1 in 65533). The address
+/// stands for the peer only to tell callers apart; it is not the peer's own address.
+pub(crate) fn peer_source(peer: crate::common::PeerId) -> std::net::Ipv4Addr {
+    use std::hash::BuildHasher;
+    static KEY: std::sync::OnceLock<std::collections::hash_map::RandomState> =
+        std::sync::OnceLock::new();
+    let hash = KEY
+        .get_or_init(std::collections::hash_map::RandomState::new)
+        .hash_one(peer);
+    // 2..=65534: skips .0.0, .0.1 and .255.255.
+    let n = (hash % 65533) as u16 + 2;
+    let [c, d] = n.to_be_bytes();
+    std::net::Ipv4Addr::new(PUBLIC_NETWORK[0], PUBLIC_NETWORK[1], c, d)
 }
 
-/// How many peers declare `ip`: those in `routes`, plus this node when `me` is `ip`.
-pub(crate) fn holders_of(
-    ip: std::net::Ipv4Addr,
-    routes: &[crate::proto::api::instance::Route],
-    me: Option<std::net::Ipv4Addr>,
-) -> usize {
-    let others = routes
-        .iter()
-        .filter(|r| {
-            r.ipv4_addr
-                .and_then(|inet| inet.address)
-                .map(std::net::Ipv4Addr::from)
-                == Some(ip)
-        })
-        .count();
-    others + usize::from(me == Some(ip))
-}
-
-/// [`confirm_source`] against the route table, for a stream `from_peer` opened claiming
-/// `claimed`; `me` is this node's own address. `from_peer` is the sending peer id from the
-/// packet header: relayed packets aren't checked against the connection they came over, so a
-/// peer that forwards traffic between a caller and this node could still forge it (the return
-/// route makes any other forger fail). With the switch off, `claimed` is returned unchanged.
+/// The source a stream from `from_peer` is given (the caller's own `claimed` address is not
+/// used): [`peer_source`] of the sending peer when the route table knows that peer, and
+/// [`UNCONFIRMED_SOURCE`] otherwise. Route entries aren't signed by the peer they describe, so the
+/// address a peer declares can't decide whose stand-in a caller gets; the peer id can. `from_peer`
+/// is the sending peer id from the packet header: relayed packets aren't checked against the
+/// connection they came over, so a peer that forwards traffic between a caller and this node
+/// could still forge it. With the switch off, `claimed` is returned unchanged.
 pub(crate) async fn confirmed_source(
     route: &(dyn crate::peers::route_trait::Route + Send + Sync),
     from_peer: Option<crate::common::PeerId>,
-    me: Option<std::net::Ipv4Addr>,
     claimed: SocketAddr,
 ) -> SocketAddr {
     if !loopback_source_enabled() {
         return claimed;
     }
-    let Some(from_peer) = from_peer else {
-        return UNCONFIRMED_SOURCE;
+    let known = match from_peer {
+        Some(peer) => route.get_peer_info(peer).await.is_some(),
+        None => false,
     };
-    let IpAddr::V4(ip) = claimed.ip().to_canonical() else {
-        return UNCONFIRMED_SOURCE;
-    };
-    let declared = route
-        .get_peer_info(from_peer)
-        .await
-        .and_then(|info| info.ipv4_addr)
-        .map(std::net::Ipv4Addr::from);
-    let holders = holders_of(ip, &route.list_routes().await, me);
-    confirm_source(claimed, declared, holders)
+    source_of(from_peer.filter(|_| known), claimed)
+}
+
+/// [`peer_source`] of `known_peer` (a sending peer the route table knows), keeping `claimed`'s
+/// port, or [`UNCONFIRMED_SOURCE`] without one. `claimed`'s address is never used.
+pub(crate) fn source_of(
+    known_peer: Option<crate::common::PeerId>,
+    claimed: SocketAddr,
+) -> SocketAddr {
+    match known_peer {
+        Some(peer) => SocketAddr::new(IpAddr::V4(peer_source(peer)), claimed.port()),
+        None => UNCONFIRMED_SOURCE,
+    }
 }
 
 /// Does a connection need its claimed source confirmed? Only with the switch on, for a plain TCP
@@ -251,30 +239,49 @@ mod loopback_source_tests {
     }
 
     #[test]
-    fn only_a_peers_own_unshared_address_is_confirmed() {
-        let claimed: SocketAddr = "10.235.4.7:4000".parse().unwrap();
-        assert_eq!(confirm_source(claimed, Some(v4("10.235.4.7")), 1), claimed);
+    fn each_peer_gets_its_own_public_network_source() {
+        let mut seen = std::collections::HashSet::new();
+        for peer in 0..2000u32 {
+            let ip = peer_source(peer);
+            let [a, b, c, d] = ip.octets();
+            assert_eq!([a, b], PUBLIC_NETWORK);
+            assert!(!matches!((c, d), (0, 0) | (0, 1) | (255, 255)), "{ip}");
+            // Stable for a peer, and maps to a stand-in of its own (not the shared one).
+            assert_eq!(peer_source(peer), ip);
+            assert_eq!(
+                loopback_source_for(SocketAddr::new(IpAddr::V4(ip), 1)),
+                std::net::Ipv4Addr::new(127, b, c, d)
+            );
+            seen.insert(ip);
+        }
+        // Different peers almost always get different sources (a few chance collisions at most).
+        assert!(seen.len() > 1950, "{}", seen.len());
+    }
+
+    #[test]
+    fn the_source_follows_the_sending_peer_not_the_claimed_address() {
+        // Peer 7 claiming any address, another peer's included, gets its own source.
+        let own = SocketAddr::new(IpAddr::V4(peer_source(7)), 4000);
+        for claimed in [
+            "10.235.4.7:4000",
+            "10.235.4.8:4000",
+            "[fd00::1]:4000",
+            "0.0.0.0:4000",
+        ] {
+            assert_eq!(
+                source_of(Some(7), claimed.parse().unwrap()),
+                own,
+                "{claimed}"
+            );
+        }
+        // No known sending peer: the shared stand-in, whatever it claims.
         assert_eq!(
-            confirm_source(
-                "[::ffff:10.235.4.7]:4000".parse().unwrap(),
-                Some(v4("10.235.4.7")),
-                1
-            ),
-            claimed
-        );
-        // Another peer's address, no address, or an address two peers claim: not confirmed.
-        assert_eq!(
-            confirm_source(claimed, Some(v4("10.235.4.8")), 1),
+            source_of(None, "10.235.4.7:4000".parse().unwrap()),
             UNCONFIRMED_SOURCE
         );
-        assert_eq!(confirm_source(claimed, None, 1), UNCONFIRMED_SOURCE);
         assert_eq!(
-            confirm_source(claimed, Some(v4("10.235.4.7")), 2),
-            UNCONFIRMED_SOURCE
-        );
-        assert_eq!(
-            confirm_source("[fd00::1]:4000".parse().unwrap(), Some(v4("10.235.4.7")), 1),
-            UNCONFIRMED_SOURCE
+            loopback_source_for(source_of(None, "10.235.4.7:4000".parse().unwrap())),
+            SHARED_LOOPBACK_SOURCE
         );
     }
 
@@ -298,34 +305,6 @@ mod loopback_source_tests {
         assert!(once_a_minute(&last));
         assert!(!once_a_minute(&last));
         assert!(!once_a_minute(&last));
-    }
-
-    #[test]
-    fn holders_count_every_peer_declaring_the_address_and_this_node() {
-        let route = |peer_id: u32, ip: &str| crate::proto::api::instance::Route {
-            peer_id,
-            ipv4_addr: Some(cidr::Ipv4Inet::new(v4(ip), 16).unwrap().into()),
-            ..Default::default()
-        };
-        let routes = [
-            route(1, "10.235.4.7"),
-            route(2, "10.235.4.8"),
-            route(3, "10.235.4.7"),
-        ];
-        assert_eq!(holders_of(v4("10.235.4.7"), &routes, None), 2);
-        assert_eq!(holders_of(v4("10.235.4.8"), &routes, None), 1);
-        assert_eq!(
-            holders_of(v4("10.235.4.8"), &routes, Some(v4("10.235.4.8"))),
-            2
-        );
-        assert_eq!(holders_of(v4("10.235.4.9"), &routes, None), 0);
-        // Unknown peer (no declared address) or nobody holding it: never confirmed.
-        let claimed: SocketAddr = "10.235.4.9:1".parse().unwrap();
-        assert_eq!(confirm_source(claimed, None, 0), UNCONFIRMED_SOURCE);
-        assert_eq!(
-            confirm_source(claimed, Some(v4("10.235.4.9")), 0),
-            UNCONFIRMED_SOURCE
-        );
     }
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -1117,8 +1096,7 @@ impl<C: NatDstConnector> TcpProxy<C> {
             match peer_mgr.upgrade() {
                 Some(peer_manager) => {
                     let route = peer_manager.get_route();
-                    let me = global_ctx.get_ipv4().map(|inet| inet.address());
-                    confirmed_source(route.as_ref(), nat_entry.from_peer, me, nat_entry.src).await
+                    confirmed_source(route.as_ref(), nat_entry.from_peer, nat_entry.src).await
                 }
                 None => UNCONFIRMED_SOURCE,
             }
