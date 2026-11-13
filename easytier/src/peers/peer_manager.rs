@@ -1106,7 +1106,8 @@ impl PeerManager {
                         }
                     } else if is_encrypted {
                         match relay_peer_map.decrypt_if_needed(&mut ret).await {
-                            Ok(true) => {}
+                            // Jay: decrypted with the named sender's own end-to-end session.
+                            Ok(true) => ret.set_verified_from(Some(from_peer_id)),
                             Ok(false) => {
                                 tracing::error!("secure session not found");
                                 continue;

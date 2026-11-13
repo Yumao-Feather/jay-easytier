@@ -101,12 +101,20 @@ pub(crate) fn loopback_source_for(src: SocketAddr) -> std::net::Ipv4Addr {
 /// a chosen caller's stand-in; two peers can still share one by chance (1 in 65533). The address
 /// stands for the peer only to tell callers apart; it is not the peer's own address.
 pub(crate) fn peer_source(peer: crate::common::PeerId) -> std::net::Ipv4Addr {
-    use std::hash::BuildHasher;
     static KEY: std::sync::OnceLock<std::collections::hash_map::RandomState> =
         std::sync::OnceLock::new();
-    let hash = KEY
-        .get_or_init(std::collections::hash_map::RandomState::new)
-        .hash_one(peer);
+    peer_source_keyed(
+        KEY.get_or_init(std::collections::hash_map::RandomState::new),
+        peer,
+    )
+}
+
+/// [`peer_source`] under the given hash key (tests use a fixed one).
+fn peer_source_keyed(
+    key: &impl std::hash::BuildHasher,
+    peer: crate::common::PeerId,
+) -> std::net::Ipv4Addr {
+    let hash = key.hash_one(peer);
     // 2..=65534: skips .0.0, .0.1 and .255.255.
     let n = (hash % 65533) as u16 + 2;
     let [c, d] = n.to_be_bytes();
@@ -117,9 +125,9 @@ pub(crate) fn peer_source(peer: crate::common::PeerId) -> std::net::Ipv4Addr {
 /// used): [`peer_source`] of the sending peer when the route table knows that peer, and
 /// [`UNCONFIRMED_SOURCE`] otherwise. Route entries aren't signed by the peer they describe, so the
 /// address a peer declares can't decide whose stand-in a caller gets; the peer id can. `from_peer`
-/// is the sending peer id from the packet header: relayed packets aren't checked against the
-/// connection they came over, so a peer that forwards traffic between a caller and this node
-/// could still forge it. With the switch off, `claimed` is returned unchanged.
+/// must be a sender the receive path checked (`ZCPacket::verified_from` for TCP, the QUIC
+/// connection's peer for QUIC), never the bare peer id from a packet header. With the switch off,
+/// `claimed` is returned unchanged.
 pub(crate) async fn confirmed_source(
     route: &(dyn crate::peers::route_trait::Route + Send + Sync),
     from_peer: Option<crate::common::PeerId>,
@@ -240,14 +248,18 @@ mod loopback_source_tests {
 
     #[test]
     fn each_peer_gets_its_own_public_network_source() {
+        // A fixed key, so the result doesn't depend on chance.
+        let key =
+            std::hash::BuildHasherDefault::<std::collections::hash_map::DefaultHasher>::default();
         let mut seen = std::collections::HashSet::new();
         for peer in 0..2000u32 {
-            let ip = peer_source(peer);
+            let ip = peer_source_keyed(&key, peer);
             let [a, b, c, d] = ip.octets();
             assert_eq!([a, b], PUBLIC_NETWORK);
             assert!(!matches!((c, d), (0, 0) | (0, 1) | (255, 255)), "{ip}");
             // Stable for a peer, and maps to a stand-in of its own (not the shared one).
-            assert_eq!(peer_source(peer), ip);
+            assert_eq!(peer_source(peer), peer_source(peer));
+            assert_eq!(peer_source_keyed(&key, peer), ip);
             assert_eq!(
                 loopback_source_for(SocketAddr::new(IpAddr::V4(ip), 1)),
                 std::net::Ipv4Addr::new(127, b, c, d)
@@ -1235,10 +1247,10 @@ impl<C: NatDstConnector> TcpProxy<C> {
             ipv4.get_destination()
         };
         let mut real_dst_ip = origin_ip;
+        // Jay: the sending peer, only when the receive path checked it (see
+        // `ZCPacket::verified_from`); the peer id in the header alone isn't proof.
+        let from_peer = packet.verified_from();
         let hdr = packet.mut_peer_manager_header().unwrap();
-        // Jay: the sending peer id from the header. Relayed packets aren't checked against the
-        // connection they came over; the return route is what makes a forged one fail.
-        let from_peer = hdr.from_peer_id.get();
 
         if !self.connector.check_packet_from_peer(
             &self.cidr_set,
@@ -1272,7 +1284,7 @@ impl<C: NatDstConnector> TcpProxy<C> {
             let real_dst = SocketAddr::V4(SocketAddrV4::new(real_dst_ip, dest_port));
 
             let mut entry = NatDstEntry::new(src, real_dst, mapped_dst);
-            entry.from_peer = Some(from_peer);
+            entry.from_peer = from_peer;
             let old_val = self.syn_map.insert(src, Arc::new(entry));
             tracing::info!(src = ?src, ?real_dst, ?mapped_dst, old_entry = ?old_val, "tcp syn received");
 
