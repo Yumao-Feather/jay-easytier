@@ -47,3 +47,5 @@ Flag as blocking anything in the diff, the commit messages or the pull request t
 - a public IP address (use `example.org`, `192.0.2.x`, `198.51.100.x`, `203.0.113.x` or `2001:db8::` in tests and docs),
 - an email address (no-reply addresses in commit attribution trailers, such as `noreply@anthropic.com` or `…@users.noreply.github.com`, are fine), a real name, a computer user name or host name, or a machine-specific absolute path,
 - a key, token, password or other secret.
+
+The attribution header that tooling adds at the top of a pull request body (the "Requested by …" line with its project link) is expected and is not a finding.
