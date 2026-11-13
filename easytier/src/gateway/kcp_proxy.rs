@@ -397,9 +397,14 @@ impl KcpProxyDst {
 
         let _g = global_ctx.net_ns.guard();
         let connector = NatDstTcpConnector {};
-        let ret = connector
-            .connect("0.0.0.0:0".parse().unwrap(), dst_socket)
-            .await?;
+        // Jay: a KCP stream's source can't be tied to the peer that sent it, so with the
+        // loopback-source switch on it always gets the shared stand-in.
+        let src = if crate::gateway::tcp_proxy::loopback_source_enabled() {
+            crate::gateway::tcp_proxy::UNCONFIRMED_SOURCE
+        } else {
+            SocketAddr::new(src_ip, src_socket.port())
+        };
+        let ret = connector.connect(src, dst_socket).await?;
 
         if let Some(mut e) = proxy_entries.get_mut(&kcp_stream.conn_id()) {
             e.state = TcpProxyEntryState::Connected.into();

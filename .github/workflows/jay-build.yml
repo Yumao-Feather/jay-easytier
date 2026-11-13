@@ -9,6 +9,9 @@ on:
   push:
     branches: ["jay/**"]
     tags: ["jay-v*"]
+  # Pull requests into a Jay branch get the same tests and builds (never a release: that needs a tag).
+  pull_request:
+    branches: ["jay/**"]
   workflow_dispatch:
 
 permissions:
@@ -59,7 +62,32 @@ jobs:
             rpc_service::api::jay_rpc_portal_tests peers::encrypt common::dns::tests::jay \
             peers::peer_rpc_service::tests::jay connector::tests::jay connector::dns_connector::tests::jay \
             peers::peer_conn::tests::jay peers::peer_conn::tests::peer_conn_secure_mode_server_accept_legacy_client \
-            peers::peer_conn::tests::peer_conn_secure_mode_different_network_name_ok
+            peers::peer_conn::tests::peer_conn_secure_mode_different_network_name_ok \
+            gateway::tcp_proxy::loopback_source_tests
+
+      # A filter that matches nothing still passes, so check every filter above finds its tests.
+      # This job runs on Linux only, where all 8 loopback-source tests exist (one is Linux/Windows only).
+      - name: Jay patch tests were found
+        run: |
+          set -o pipefail
+          count() {
+            cargo test --locked -p easytier --no-default-features --features "$JAY_FEATURES" --lib -- "$1" --list 2>/dev/null | grep -c "^$1.*: test\$" || true
+          }
+          ok=1
+          for filter in rpc_service::api::jay_rpc_portal_tests peers::encrypt common::dns::tests::jay \
+              peers::peer_rpc_service::tests::jay connector::tests::jay connector::dns_connector::tests::jay \
+              peers::peer_conn::tests::jay peers::peer_conn::tests::peer_conn_secure_mode_server_accept_legacy_client \
+              peers::peer_conn::tests::peer_conn_secure_mode_different_network_name_ok; do
+            n=$(count "$filter"); echo "$filter: $n"
+            [ "$n" -ge 1 ] || ok=0
+          done
+          n=$(count gateway::tcp_proxy::loopback_source_tests); echo "gateway::tcp_proxy::loopback_source_tests: $n"
+          [ "$n" -ge 8 ] || ok=0
+          [ "$ok" = 1 ]
+
+      # Jay's builds leave KCP out, but the patch touches kcp_proxy.rs too: keep it compiling.
+      - name: KCP still compiles with the patch
+        run: cargo check --locked -p easytier --no-default-features --features "$JAY_FEATURES,kcp" --lib
 
       # Fails the build (and so the release) on any advisory not reviewed in .cargo/audit.toml.
       # 0.21.x can't read the current advisory database, so it must be 0.22 or later.

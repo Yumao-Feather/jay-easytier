@@ -453,6 +453,9 @@ impl ZCPacketType {
 pub struct ZCPacket {
     inner: BytesMut,
     packet_type: ZCPacketType,
+    /// Jay: the sender this packet is known to come from (see [`ZCPacket::verified_sender`]).
+    /// Any packet built anew starts without it.
+    verified_sender: Option<u64>,
 }
 
 impl ZCPacket {
@@ -468,6 +471,7 @@ impl ZCPacket {
         Self {
             inner: BytesMut::new(),
             packet_type: ZCPacketType::NIC,
+            verified_sender: None,
         }
     }
 
@@ -475,7 +479,21 @@ impl ZCPacket {
         Self {
             inner: buf,
             packet_type,
+            verified_sender: None,
         }
+    }
+
+    /// Jay: the sender's key (`gateway::tcp_proxy::sender_key` of its static public key), set only
+    /// when the packet came straight over an authenticated secure-mode connection and names that
+    /// connection's peer as its sender. `None` for anything else: legacy connections, relayed or
+    /// rebuilt packets.
+    pub fn verified_sender(&self) -> Option<u64> {
+        self.verified_sender
+    }
+
+    /// Jay: records the checked sender (see [`Self::verified_sender`]).
+    pub fn set_verified_sender(&mut self, sender: Option<u64>) {
+        self.verified_sender = sender;
     }
 
     pub fn new_with_payload(payload: &[u8]) -> Self {

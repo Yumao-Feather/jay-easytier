@@ -640,7 +640,17 @@ impl QuicStreamReceiver {
                                                     warn!("quic stream transfer error: {:?}", e);
                                                 }
                                             }
-                                            Err(e) => warn!("failed to establish quic stream: {:?}", e),
+                                            Err(e) => {
+                                                // Jay: limited like the TCP path while the switch is on.
+                                                static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                                                if !crate::gateway::tcp_proxy::loopback_source_enabled()
+                                                    || crate::gateway::tcp_proxy::once_a_minute(&LAST)
+                                                {
+                                                    warn!("failed to establish quic stream: {:?}", e);
+                                                } else {
+                                                    debug!("failed to establish quic stream: {:?}", e);
+                                                }
+                                            }
                                         }
                                     });
                                 }
@@ -774,9 +784,19 @@ impl QuicStreamReceiver {
 
         debug!("quic connect to dst socket: {:?}", dst_socket);
 
+        // Jay: a QUIC stream's sender isn't checked against an authenticated connection, so with
+        // the switch on a local service on loopback sees it as the one shared stand-in.
+        let src = if dst_socket.ip().is_loopback() {
+            crate::gateway::tcp_proxy::confirmed_source(
+                None,
+                SocketAddr::new(src_ip, src_socket.port()),
+            )
+        } else {
+            SocketAddr::new(src_ip, src_socket.port())
+        };
         let _g = global_ctx.net_ns.guard();
         let connector = crate::gateway::tcp_proxy::NatDstTcpConnector {};
-        let ret = connector.connect("0.0.0.0:0".parse()?, dst_socket).await?;
+        let ret = connector.connect(src, dst_socket).await?;
 
         if let Some(mut e) = proxy_entries.get_mut(&handle) {
             e.state = TcpProxyEntryState::Connected.into();

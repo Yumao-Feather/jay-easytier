@@ -44,7 +44,28 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
    still reveal their name. Only the handshake reply changed: the client still sends its own name in
    its first message, as it must.
    (`easytier/src/peers/peer_conn.rs`)
-9. **Build hygiene** (`.github/workflows/jay-build.yml`):
+9. **Callers told apart on loopback (opt-in).** Without a TUN device, EasyTier hands a connection
+   for its own virtual address to the local service on `127.0.0.1`. With `JAY_ET_LOOPBACK_SOURCE`
+   set to exactly `1`, TCP connections handed to a local service on loopback are bound to a stand-in
+   for the caller instead:
+   - `127.235.c.d` of the sender's own when the connection came straight over a secure-mode
+     connection with that sender: picked by a keyed hash (random key per process) of the static
+     public key its Noise handshake proved, and only for packets that name that connection's peer
+     as their sender and are addressed to this node (the session decrypts every such packet);
+   - the one shared address `127.255.255.254` for everything else: legacy (non-secure) connections,
+     traffic relayed through another peer, QUIC- and KCP-proxied streams (Jay's builds don't
+     include KCP). The address a peer declares in the route table, the caller's own source address
+     and the peer id in a packet header never decide the stand-in.
+   `c.d` is never `0.0`, `0.1` or `255.255`. Two senders share a stand-in only by chance (1 in 65533).
+   No remote TCP caller arrives as `127.0.0.1`. If the bind fails, the connection is refused rather
+   than going out unbound, so leave the switch off where only `127.0.0.1` exists (macOS). While the
+   switch is on, failed proxied connections (TCP and QUIC) are logged at most once a minute (the
+   rest at debug). Anyone can make new keys, so the stand-in only tells callers apart for
+   rate limits; it is not an identity, and it doesn't match the caller's address.
+   UDP is unchanged. The public network (`10.235.0.0/16`) is fixed here and must match Jay's
+   `PublicNetworkProfile.Subnet`. Off by default. (`easytier/src/gateway/tcp_proxy.rs`,
+   `quic_proxy.rs`, `kcp_proxy.rs`, `peers/peer_conn.rs`, `tunnel/packet_def.rs`)
+10. **Build hygiene** (`.github/workflows/jay-build.yml`):
    - The build runs with `--locked`, and `cargo audit` runs on every build. Any advisory not reviewed
      in `.cargo/audit.toml` fails the build, so no release goes out with an unreviewed advisory.
    - Every GitHub Action is pinned to a commit hash.
