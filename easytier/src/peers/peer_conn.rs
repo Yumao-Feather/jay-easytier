@@ -1292,12 +1292,8 @@ impl PeerConn {
             let my_name = self.global_ctx.get_network_identity().network_name;
             let peer_name = self.get_network_identity().network_name;
             let reply_name = Some(Self::network_name_for_reply(&my_name, &peer_name));
-            self.send_handshake(
-                send_digest,
-                &self.get_network_identity().network_name,
-                reply_name,
-            )
-            .await?;
+            self.send_handshake(send_digest, &peer_name, reply_name)
+                .await?;
         } else {
             return Err(Error::WaitRespError(format!(
                 "unexpected packet type during handshake: {}",
@@ -1978,18 +1974,25 @@ pub mod tests {
             s_ret.unwrap();
 
             assert_eq!(c_peer.get_network_identity().network_name, "fg-foreign");
+            let sent = s_recorder.sent.lock().unwrap();
+            let has = |needle: &str| {
+                sent.iter().any(|pkt| {
+                    pkt.payload()
+                        .windows(needle.len())
+                        .any(|w| w == needle.as_bytes())
+                })
+            };
+            // Positive control: the plain reply is readable on the wire, so the echo is found...
+            assert!(
+                has("fg-foreign"),
+                "echo not found: the check would be vacuous"
+            );
+            // ...and the server's own name is not.
             if server_name != "fg-foreign" {
-                let sent = s_recorder.sent.lock().unwrap();
-                assert!(!sent.is_empty());
-                for pkt in sent.iter() {
-                    let bytes = pkt.payload();
-                    assert!(
-                        !bytes
-                            .windows(server_name.len())
-                            .any(|w| w == server_name.as_bytes()),
-                        "server name found in the handshake reply"
-                    );
-                }
+                assert!(
+                    !has(server_name),
+                    "server name found in the handshake reply"
+                );
             }
         }
     }

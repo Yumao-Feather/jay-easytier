@@ -39,7 +39,10 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
    peer that already declared the same name gets it back; anyone else gets `fg-<their own name>`.
    Limits: a peer can still confirm a guessed name (the reply echoes it unchanged, and in secure mode
    comes with role_hint 1), so this only helps for names that can't be guessed. Jay's room names are
-   random or derived with HKDF; the public network's name is public anyway. Nodes that haven't upgraded
+   `amber-` plus 8 random characters from a 32-character alphabet (40 bits; the room secret is a
+   separate 12 characters, 60 bits), or, for wrapped rooms, derived with HKDF from that secret, so
+   guessing the name is as hard as guessing the secret. Each guess costs a full connection and
+   handshake. The public network's name is public anyway. Nodes that haven't upgraded
    still reveal their name. Only the handshake reply changed: the client still sends its own name in
    its first message, as it must.
    (`easytier/src/peers/peer_conn.rs`)

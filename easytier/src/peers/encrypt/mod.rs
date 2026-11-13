@@ -72,7 +72,9 @@ impl Encryptor for RejectCipher {
 
 // Jay builds always need a real AEAD cipher.
 #[cfg(not(any(feature = "aes-gcm", feature = "wireguard", feature = "openssl-crypto")))]
-compile_error!("Jay's EasyTier build needs an AEAD cipher: enable the wireguard, aes-gcm or openssl-crypto feature");
+compile_error!(
+    "Jay's EasyTier build needs an AEAD cipher: enable the wireguard, aes-gcm or openssl-crypto feature"
+);
 
 /// Create an encryptor based on the algorithm name
 pub fn create_encryptor(

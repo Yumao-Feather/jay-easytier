@@ -252,7 +252,10 @@ struct ResponseWrapper {
 }
 
 trait RecordIter<'a>: Iterator<Item = &'a hickory_proto_v25::rr::Record> + Send + 'a {}
-impl<'a, T> RecordIter<'a> for T where T: Iterator<Item = &'a hickory_proto_v25::rr::Record> + Send + 'a {}
+impl<'a, T> RecordIter<'a> for T where
+    T: Iterator<Item = &'a hickory_proto_v25::rr::Record> + Send + 'a
+{
+}
 
 #[async_trait::async_trait]
 impl ResponseHandler for ResponseWrapper {
