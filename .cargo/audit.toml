@@ -24,11 +24,10 @@ ignore = [
     "RUSTSEC-2026-0479", # openssl
     "RUSTSEC-2025-0132", # maxminddb
     "RUSTSEC-2026-0235", # rkyv
-    "RUSTSEC-2026-0367", # zip
-    "RUSTSEC-2026-0368", # zip
-    "RUSTSEC-2026-0369", # zip
-    "RUSTSEC-2026-0429", # zip
-    "RUSTSEC-2026-0383", # webpki-root-certs
+    # webpki-root-certs 1.0.0: only rustls-platform-verifier's wasm32 dependency. Checked 2026-11-14 with
+    # `cargo tree -e normal,build --target <t> -i webpki-root-certs` for all 7 release targets and
+    # aarch64-linux-android: nothing to print. It only shows up for wasm32-unknown-unknown.
+    "RUSTSEC-2026-0383",
     "RUSTSEC-2026-0387", # crypto-bigint
     "RUSTSEC-2026-0459", # libsqlite3-sys
     # hickory 0.25.2 (hickory-proto, hickory-resolver). Not in Jay's build: easytier's only path to
@@ -61,6 +60,18 @@ ignore = [
     "RUSTSEC-2026-0514", # hickory-resolver <0.26.2: with DNSSEC validation enabled, lookup() and
                          # lookup_ip() returned bogus records as Ok. Only with validation on; plain
                          # lookups are unchanged. Fixed in 0.26.2.
+
+    # --- Windows build script only ---
+    # zip 4.0.0 is a build-dependency of easytier on Windows hosts (`[target.'cfg(windows)'.build-dependencies]`),
+    # so it is never compiled into easytier-core or easytier-cli. build.rs uses it for one archive only:
+    # the protoc zip it downloads when no protoc is found, after checking that zip's pinned SHA-256
+    # (PROTOC_WIN64_SHA256). Jay's CI sets PROTOC, so the download path doesn't run there.
+    # Checked 2026-11-14 with `cargo tree -e normal,build --target all -i zip`: the only path is
+    # [build-dependencies] of easytier. Exit: drop the download (require PROTOC) or update zip.
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+    "RUSTSEC-2026-0429",
 
     # --- In the build, reviewed, not reachable ---
     # quick-xml: only through plist in service-manager, which reads launchd plists when installing a

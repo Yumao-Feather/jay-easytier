@@ -2,14 +2,8 @@ _version: 2
 
 core_clap:
   config_server:
-    en: |+
-      config server address, allow format:
-      full url: --config-server udp://127.0.0.1:22020/admin, 'udp' can be replaced with tcp, ws, wss (when config server ws is proxied to wss)
-      only user name: --config-server admin, will use official server
-    zh-CN: |+
-      配置服务器地址。允许格式：
-      完整URL：--config-server udp://127.0.0.1:22020/admin，udp可以根据配置服务器替换为 tcp，ws，wss(配置服务器ws被代理为wss时)
-      仅用户名：--config-server admin，将使用官方的服务器
+    en: "not available in Jay's build: easytier-core refuses to start with --config-server (no remote management)"
+    zh-CN: "Jay 的版本不支持：带 --config-server 时 easytier-core 拒绝启动（不允许远程管理）"
   machine_id:
     en: |+
       the machine id to identify this machine, used for config recovery after disconnection, must be unique and fixed. by default it is loaded from persisted local state; on first start it may be migrated from system information or generated, then remains fixed.
@@ -67,8 +61,8 @@ core_clap:
       还支持将代理网络映射到其他CIDR，例如：10.0.0.0/24->192.168.0.0/24
       其他对等节点可以通过 IP 192.168.0.1 来访问 10.0.0.1
   rpc_portal:
-    en: "rpc portal address to listen for management. 0 means random port, 12345 means listen on 12345 of localhost, 0.0.0.0:12345 means listen on 12345 of all interfaces. default is 0 and will try 15888 first"
-    zh-CN: "用于管理的RPC门户地址。0表示随机端口，12345表示在localhost的12345上监听，0.0.0.0:12345表示在所有接口的12345上监听。默认是0，首先尝试15888"
+    en: "rpc portal address to listen for management, loopback only in Jay's build. 0 means random port, 12345 means listen on 12345 of 127.0.0.1, [::1]:12345 is also accepted; a non-loopback address such as 0.0.0.0:12345 is refused. default is 0 and will try 15888 first"
+    zh-CN: "用于管理的RPC门户地址，Jay 的版本只能监听本机回环地址。0表示随机端口，12345表示在127.0.0.1的12345上监听，也可以写[::1]:12345；0.0.0.0:12345 这类非回环地址会被拒绝。默认是0，首先尝试15888"
   rpc_portal_whitelist:
     en: "rpc portal whitelist, only allow these addresses to access rpc portal, e.g.: 127.0.0.1,127.0.0.0/8,::1/128"
     zh-CN: "RPC门户白名单，仅允许这些地址访问RPC门户，例如：127.0.0.1/32,127.0.0.0/8,::1/128"
@@ -102,8 +96,8 @@ core_clap:
     en: "instance name to identify this vpn node in same machine"
     zh-CN: "实例名称，用于在同一台机器上标识此VPN节点"
   vpn_portal:
-    en: "url that defines the vpn portal, allow other vpn clients to connect. example: wg://0.0.0.0:11010/10.14.14.0/24, means the vpn portal is a wireguard server listening on vpn.example.com:11010, and the vpn client is in network of 10.14.14.0/24"
-    zh-CN: "定义VPN门户的URL，允许其他VPN客户端连接。示例：wg://0.0.0.0:11010/10.14.14.0/24，表示VPN门户是监听在vpn.example.com:11010的wireguard服务器，VPN客户端在10.14.14.0/24网络中"
+    en: "not available in Jay's build: the WireGuard VPN portal is refused"
+    zh-CN: "Jay 的版本不支持：不会启动 WireGuard VPN 门户"
   default_protocol:
     en: "default protocol to use when connecting to peers"
     zh-CN: "连接到对等节点时使用的默认协议"

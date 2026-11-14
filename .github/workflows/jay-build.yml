@@ -22,6 +22,7 @@ env:
   CARGO_TERM_COLOR: always
   # Only what Jay uses. Left out on purpose: websocket, kcp, faketcp and magic-dns.
   JAY_FEATURES: wireguard,smoltcp,tun,socks5,quic,zstd
+  # Keep in step with PROTOC_VERSION and PROTOC_WIN64_SHA256 in easytier/build.rs.
   PROTOC_VERSION: "29.3"
 
 defaults:
@@ -82,11 +83,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { platform: windows-x86_64, target: x86_64-pc-windows-msvc, os: windows-latest, third_party: x86_64, exe: .exe }
-          - { platform: windows-i686, target: i686-pc-windows-msvc, os: windows-latest, third_party: i686, exe: .exe }
+          - { platform: windows-x86_64, target: x86_64-pc-windows-msvc, os: windows-2025, third_party: x86_64, exe: .exe }
+          - { platform: windows-i686, target: i686-pc-windows-msvc, os: windows-2025, third_party: i686, exe: .exe }
           - { platform: windows-arm64, target: aarch64-pc-windows-msvc, os: windows-11-arm, third_party: arm64, exe: .exe }
-          - { platform: macos-x86_64, target: x86_64-apple-darwin, os: macos-latest }
-          - { platform: macos-aarch64, target: aarch64-apple-darwin, os: macos-latest }
+          - { platform: macos-x86_64, target: x86_64-apple-darwin, os: macos-26 }
+          - { platform: macos-aarch64, target: aarch64-apple-darwin, os: macos-26 }
           - { platform: linux-x86_64, target: x86_64-unknown-linux-musl, os: ubuntu-24.04 }
           - { platform: linux-aarch64, target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
     runs-on: ${{ matrix.os }}
@@ -180,6 +181,17 @@ jobs:
           fi
           printf 'EasyTier %s with Jay hardening patches\nsource: %s/%s/commit/%s\nfeatures: %s\nlicense: LGPL-3.0\n' \
             "$version" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$JAY_FEATURES" > "dist/$name/JAY-BUILD.txt"
+          {
+            printf 'runner: %s, image %s %s\n' "${{ matrix.os }}" "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+            printf 'protoc: %s\n' "$PROTOC_VERSION"
+            echo "rustc -vV:"
+            rustc -vV | sed 's/^/  /'
+            if [ "${{ runner.os }}" = Linux ]; then
+              echo "apt packages:"
+              dpkg-query -W -f='  ${Package} ${Version}\n' musl-tools mold
+            fi
+          } >> "dist/$name/JAY-BUILD.txt"
+          cat "dist/$name/JAY-BUILD.txt"
           cp LICENSE "dist/$name/LICENSE"
           zip_name="easytier-${{ matrix.platform }}-v${version}-jay-${jay_rev}.zip"
           if [ "${{ runner.os }}" = Windows ]; then

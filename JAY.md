@@ -47,8 +47,14 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
 9. **Build hygiene** (`.github/workflows/jay-build.yml`):
    - The build runs with `--locked`, and `cargo audit` runs on every build. Any advisory not reviewed
      in `.cargo/audit.toml` fails the build, so no release goes out with an unreviewed advisory.
-   - Every GitHub Action is pinned to a commit hash.
-   - protoc is downloaded with a pinned SHA-256, not by the Windows build script.
+   - Only `jay-build.yml` runs here. Upstream's own workflows (and the Dockerfile only they used) are
+     removed on this branch; delete them again after a rebase.
+   - Every GitHub Action is pinned to a commit hash, the runner images are named (no `-latest`), and
+     Rust is pinned to the patch release in `rust-toolchain.toml`. Each zip's `JAY-BUILD.txt` records
+     the runner image, `rustc -vV`, the protoc version and, on Linux, the apt package versions.
+   - protoc is downloaded with a pinned SHA-256. Without a protoc on a Windows host, `build.rs`
+     downloads the same release and checks the same SHA-256 (upstream fetched an unchecked release
+     candidate).
    - The prebuilt Windows files in `easytier/third_party` are pinned by SHA-256. wintun and the
      WinDivert driver must carry valid Authenticode signatures.
 
@@ -85,20 +91,33 @@ are only taken when Jay needs them. Watch the EasyTier repo's releases and the R
 - **jay-v2.6.4-5** (pending). Checked upstream up to main 3b32aaf (2026-11-12). Ported #2818 (patch 8). Not
   applicable: web console heartbeat fixes (#2718, no config server), http(s) discovery changes (#2748,
   #2783, removed by patch 4), BufPool fixes (#2634) and the Rust 1.95 NIC workaround (#2703), whose code
-  isn't in v2.6.4.
+  isn't in v2.6.4. Build and docs from the repository audit: pinned protoc in `build.rs`, named runner
+  images, Rust 1.95.0, toolchain details in `JAY-BUILD.txt`, upstream workflows removed, and the
+  `--rpc-portal`, `--config-server` and `--vpn-portal` help (English and Chinese) now says what this
+  build does.
 
 ## Updating to a new upstream version
 
 1. Read the upstream diff between the old and the new tag, paying most attention to
    `Cargo.lock`, `build.rs`, `easytier/third_party` and anything that touches the network.
 2. Create `jay/<new tag>` from the new tag, and cherry-pick the patch commits from this branch.
-3. Update the pins in the workflow if `third_party` changed (and say why in the commit).
+3. Delete upstream's workflows again (only `jay-build.yml` stays). Update the pins in the workflow if
+   `third_party` changed (and say why in the commit). Keep `PROTOC_VERSION` and the win64 SHA-256 in
+   `jay-build.yml` and `easytier/build.rs` the same.
 4. Tag `jay-v<version>-<n>`. The release job creates a **draft** release with the zips,
    `SHA256SUMS.txt` and `SIZES.txt`.
 5. Have it signed (below), then publish the draft.
-6. In Jay, update the version, asset names, sizes, SHA-256 values, full commit and seq in
-   `src/Amber.Core/Multiplayer/EasyTier.cs`, and copy `SHA256SUMS.txt` and `SHA256SUMS.txt.sigs` into
-   `src/Amber.Core/Multiplayer/EasyTierSigned/`.
+6. In Jay, change the pins in this order (`docs/pins.md` in the Jay repository explains them; its
+   `PinsTests` fail until every place agrees):
+   1. `build/pins.json`: tag, commit, file names, sizes and SHA-256 values of every `easytier-*` entry.
+   2. `src/Amber.Core/Multiplayer/EasyTier.cs`: release tag, short and full commit, seq, sizes and
+      SHA-256 values.
+   3. `src/Amber.Core/Multiplayer/EasyTierSigned/`: copy in `SHA256SUMS.txt` and `SHA256SUMS.txt.sigs`.
+   4. The relay node install scripts `node/install.sh` and `node/install-windows.ps1` (tag and hashes),
+      and `node/docker-compose.yml` if it names an EasyTier image or release.
+   5. `scripts/bundle-easytier.sh` if it names the release.
+   6. The tag, seq and commit examples in `docs/security/release-signing.md`.
+   Then run Jay's tests (`PinsTests`, `EasyTierSignatureTests`, `EasyTierInstallTests`).
 
 ## Signing
 
