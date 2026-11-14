@@ -17,18 +17,27 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
    AEAD feature. (`easytier/src/peers/encrypt/mod.rs`)
 2. **Management API on loopback only.** A bare `--rpc-portal <port>` used to bind `0.0.0.0`, and
    any address was accepted. It now binds `127.0.0.1`, and a non-loopback address is an error.
-   (`easytier/src/rpc_service/api.rs`)
+   On it, instance management (`WebClientService`: start, stop, replace or list whole instances)
+   isn't offered; `easytier-cli` already copes without it. `PatchConfig` only adds or removes
+   connectors (what Jay's `connector add` uses), and `GetConfig` leaves out the network secret, the
+   secure-mode private key and ACL group secrets. (`easytier/src/rpc_service/api.rs`,
+   `easytier/src/rpc_service/config.rs`)
 3. **No remote management.** `--config-server` hands the whole node to a web console on another
    machine. Jay never uses it, so `easytier-core` refuses to start with it. (`easytier/src/core.rs`)
-4. **No VPN portal, no http(s) peer lists.** The WireGuard VPN portal opens an extra public port
-   for plain WireGuard clients, and an `http(s)://` peer URL lets that web server choose which
-   nodes this one joins. They can't be compiled out separately, so the build refuses them at runtime.
+4. **No VPN portal, no http(s) or DNS peer lists.** The WireGuard VPN portal opens an extra public
+   port for plain WireGuard clients, and an `http(s)://`, `txt://` or `srv://` peer URL lets whoever
+   runs that web server or DNS name choose which nodes this one joins. They can't be compiled out
+   separately, so the build refuses them at runtime.
    (`easytier/src/instance/instance.rs`, `easytier/src/connector/mod.rs`)
 5. **Fewer features.** Built with `--no-default-features --features
    wireguard,smoltcp,tun,socks5,quic,zstd`. Websocket, KCP, FakeTCP and magic DNS are left out.
 6. **No built-in public DNS servers.** When the system resolver failed, upstream also asked two fixed
    public DNS servers, in plain UDP, for the host name. Only the system's own name servers are used now.
-   (`easytier/src/common/dns.rs`)
+   The built-in STUN lists also lose their `txt:` entries (a server list read from a DNS TXT record
+   upstream controls), so there is no built-in IPv6 STUN server, and TCP NAT detection asks the
+   servers given with `--stun-servers` instead of a separate built-in list of third-party servers.
+   Jay passes its own STUN list. (`easytier/src/common/dns.rs`, `easytier/src/common/stun.rs`,
+   `easytier/src/common/global_ctx.rs`)
 7. **Relay only stays relay only.** With `--disable-p2p` the node answers no address-list or
    hole-punch requests, makes no exception for peers that ask for p2p (`need_p2p`), and doesn't use
    STUN. (`easytier/src/peers/peer_rpc_service.rs`, `easytier/src/connector/`,
@@ -85,7 +94,10 @@ are only taken when Jay needs them. Watch the EasyTier repo's releases and the R
 - **jay-v2.6.4-5** (pending). Checked upstream up to main 3b32aaf (2026-11-12). Ported #2818 (patch 8). Not
   applicable: web console heartbeat fixes (#2718, no config server), http(s) discovery changes (#2748,
   #2783, removed by patch 4), BufPool fixes (#2634) and the Rust 1.95 NIC workaround (#2703), whose code
-  isn't in v2.6.4.
+  isn't in v2.6.4. From the repository audit: the management API offers no instance management and
+  hands out no secrets (patch 2), `txt://` and `srv://` peer URLs are refused (patch 4), no `txt:`
+  STUN entries and TCP STUN follows `--stun-servers` (patch 6), and tests that the refused features
+  stay refused.
 
 ## Updating to a new upstream version
 
