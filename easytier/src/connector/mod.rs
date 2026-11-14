@@ -2,7 +2,6 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 use crate::{
     common::{dns::socket_addrs, error::Error, global_ctx::ArcGlobalCtx, idn},
-    connector::dns_connector::DnsTunnelConnector,
     proto::common::PeerFeatureFlag,
     tunnel::{
         self, IpScheme, IpVersion, TunnelConnector, TunnelError, TunnelScheme,
@@ -10,6 +9,8 @@ use crate::{
     },
     utils::BoxExt,
 };
+#[allow(unused_imports)]
+use dns_connector::DnsTunnelConnector;
 #[allow(unused_imports)]
 use http_connector::HttpTunnelConnector;
 use rand::seq::SliceRandom;
@@ -291,14 +292,13 @@ pub async fn create_connector_by_url(
             )));
         }
         TunnelScheme::Ring => RingTunnelConnector::new(url).boxed(),
+        // Jay hardening: txt:// and srv:// let whoever controls that DNS name decide which
+        // nodes this one connects to. Jay never uses them, so this build refuses them too.
         TunnelScheme::Txt | TunnelScheme::Srv => {
-            if url.host_str().is_none() {
-                return Err(Error::InvalidUrl(format!(
-                    "host should not be empty in txt or srv url: {}",
-                    url
-                )));
-            }
-            DnsTunnelConnector::new(url, global_ctx.clone()).boxed()
+            return Err(Error::InvalidUrl(format!(
+                "DNS-based peer lists are disabled in this build: {}",
+                url
+            )));
         }
     };
     connector.set_ip_version(effective_connector_ip_version);
@@ -318,6 +318,23 @@ mod tests {
     use super::{
         create_connector_by_url, should_background_p2p_with_peer, should_try_p2p_with_peer,
     };
+
+    #[tokio::test]
+    async fn jay_peer_list_urls_are_refused() {
+        let global_ctx = get_mock_global_ctx();
+        for url in [
+            "http://example.org/peers",
+            "https://example.org/peers",
+            "txt://example.org",
+            "srv://example.org",
+        ] {
+            let ret = create_connector_by_url(url, &global_ctx, IpVersion::Both).await;
+            assert!(
+                matches!(ret, Err(crate::common::error::Error::InvalidUrl(_))),
+                "{url}"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn connector_rejects_easytier_managed_ipv6_destination() {
