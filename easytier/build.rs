@@ -42,9 +42,18 @@ impl WindowsBuild {
         Ok(target_dir.to_path_buf())
     }
 
+    // Jay: the same protoc release that .github/workflows/jay-build.yml installs (PROTOC_VERSION
+    // and the win64 SHA-256 there), checked before use. Upstream fetched an unchecked release candidate.
+    const PROTOC_VERSION: &'static str = "29.3";
+    const PROTOC_WIN64_SHA256: &'static str =
+        "57ea59e9f551ad8d71ffaa9b5cfbe0ca1f4e720972a1db7ec2d12ab44bff9383";
+
     fn download_protoc() -> PathBuf {
-        println!("cargo:info=use exist protoc: {:?}", "k");
-        let out_dir = Self::get_cargo_target_dir().unwrap().join("protobuf");
+        use sha2::Digest as _;
+
+        let out_dir = Self::get_cargo_target_dir()
+            .unwrap()
+            .join(format!("protobuf-{}", Self::PROTOC_VERSION));
         let fname = out_dir.join("bin/protoc.exe");
         if fname.exists() {
             println!("cargo:info=use exist protoc: {:?}", fname);
@@ -53,17 +62,24 @@ impl WindowsBuild {
 
         println!("cargo:info=need download protoc, please wait...");
 
-        let url = "https://github.com/protocolbuffers/protobuf/releases/download/v26.0-rc1/protoc-26.0-rc-1-win64.zip";
-        let response = reqwest::blocking::get(url).unwrap();
-        println!("{:?}", response);
-        let mut content = response
-            .bytes()
-            .map(|v| v.to_vec())
-            .map(Cursor::new)
-            .map(zip::ZipArchive::new)
-            .unwrap()
-            .unwrap();
-        content.extract(out_dir).unwrap();
+        let url = format!(
+            "https://github.com/protocolbuffers/protobuf/releases/download/v{0}/protoc-{0}-win64.zip",
+            Self::PROTOC_VERSION
+        );
+        let bytes = reqwest::blocking::get(&url)
+            .and_then(|r| r.error_for_status())
+            .and_then(|r| r.bytes())
+            .unwrap_or_else(|e| panic!("download {url}: {e}; or set PROTOC to a local protoc.exe"));
+        let actual = format!("{:x}", sha2::Sha256::digest(&bytes));
+        if actual != Self::PROTOC_WIN64_SHA256 {
+            panic!(
+                "protoc download {url} has SHA-256 {actual}, expected {}; or set PROTOC to a local protoc.exe",
+                Self::PROTOC_WIN64_SHA256
+            );
+        }
+        zip::ZipArchive::new(Cursor::new(bytes.to_vec()))
+            .and_then(|mut z| z.extract(&out_dir))
+            .unwrap_or_else(|e| panic!("unpack {url}: {e}"));
 
         fname
     }
