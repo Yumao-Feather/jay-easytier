@@ -25,12 +25,10 @@ use crate::common::error::Error;
 use super::dns::resolve_txt_record;
 use super::stun_codec_ext::*;
 
-const DEFAULT_UDP_STUN_SERVERS: &[&str] = &[
-    "txt:stun.easytier.cn",
-    "stun.miwifi.com",
-    "stun.chat.bilibili.com",
-    "stun.hitv.com",
-];
+// Jay: no `txt:` entries. Those look up a server list in a DNS TXT record that upstream
+// controls; Jay passes its own list with `--stun-servers` anyway.
+const DEFAULT_UDP_STUN_SERVERS: &[&str] =
+    &["stun.miwifi.com", "stun.chat.bilibili.com", "stun.hitv.com"];
 
 const DEFAULT_TCP_STUN_SERVERS: &[&str] = &[
     "stun.hot-chilli.net",
@@ -42,7 +40,7 @@ const DEFAULT_TCP_STUN_SERVERS: &[&str] = &[
     "stun.radiojar.com",
 ];
 
-const DEFAULT_UDP_V6_STUN_SERVERS: &[&str] = &["txt:stun-v6.easytier.cn"];
+const DEFAULT_UDP_V6_STUN_SERVERS: &[&str] = &[];
 
 struct HostResolverIter {
     hostnames: Vec<String>,
@@ -1348,6 +1346,17 @@ mod tests {
     use tokio_util::task::AbortOnDropHandle;
 
     use super::*;
+
+    #[test]
+    fn jay_default_stun_lists_have_no_txt_lookups() {
+        for host in DEFAULT_UDP_STUN_SERVERS
+            .iter()
+            .chain(DEFAULT_TCP_STUN_SERVERS)
+            .chain(DEFAULT_UDP_V6_STUN_SERVERS)
+        {
+            assert!(!host.starts_with("txt:"), "{host}");
+        }
+    }
 
     #[tokio::test]
     async fn test_udp_nat_type_detector() {

@@ -1647,6 +1647,20 @@ mod tests {
     };
 
     #[tokio::test]
+    async fn jay_vpn_portal_is_refused() {
+        use crate::common::config::{ConfigLoader, TomlConfigLoader, VpnPortalConfig};
+
+        let config = TomlConfigLoader::default();
+        config.set_vpn_portal_config(VpnPortalConfig {
+            client_cidr: "10.14.14.0/24".parse().unwrap(),
+            wireguard_listen: "127.0.0.1:0".parse().unwrap(),
+        });
+        let mut instance = super::Instance::new(config);
+        let err = instance.run_vpn_portal().await.unwrap_err();
+        assert!(err.to_string().contains("disabled"), "{err}");
+    }
+
+    #[tokio::test]
     async fn test_rpc_portal_whitelist() {
         use cidr::IpCidr;
 
