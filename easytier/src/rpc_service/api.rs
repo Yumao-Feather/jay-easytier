@@ -31,7 +31,7 @@ use crate::{
         proxy::TcpProxyRpcService, stats::StatsRpcService, vpn_portal::VpnPortalRpcService,
     },
     tunnel::{TunnelListener, tcp::TcpTunnelListener},
-    web_client::{DefaultHooks, WebClientHooks},
+    web_client::WebClientHooks,
 };
 
 pub struct ApiRpcServer<T: TunnelListener + 'static> {
@@ -156,13 +156,18 @@ pub fn register_api_rpc_service(
         "",
     );
 
-    registry.register(
-        WebClientServiceServer::new(InstanceManageRpcService::new(
-            instance_manager.clone(),
-            hooks.unwrap_or(Arc::new(DefaultHooks)),
-        )),
-        "",
-    );
+    // Jay hardening: the local management API doesn't offer instance management (start,
+    // stop, replace or read whole instance configs). Only the web-client session, which
+    // this build refuses to start (`--config-server`), passes hooks and gets it.
+    if let Some(hooks) = hooks {
+        registry.register(
+            WebClientServiceServer::new(InstanceManageRpcService::new(
+                instance_manager.clone(),
+                hooks,
+            )),
+            "",
+        );
+    }
 
     registry.register(
         PeerCenterRpcServer::new(PeerCenterManageRpcService::new(instance_manager.clone())),
@@ -243,5 +248,24 @@ mod jay_rpc_portal_tests {
     fn non_loopback_is_refused() {
         assert!(parse_rpc_portal(Some("0.0.0.0:15996".to_owned())).is_err());
         assert!(parse_rpc_portal(Some("192.168.1.2:15995".to_owned())).is_err());
+    }
+
+    #[test]
+    fn local_api_has_no_instance_management() {
+        use super::*;
+        use crate::web_client::DefaultHooks;
+
+        let manager = Arc::new(NetworkInstanceManager::new());
+        let registry = ServiceRegistry::new();
+        register_api_rpc_service(&manager, &registry, None);
+
+        // unregister() reports whether the service was there.
+        let web_client = WebClientServiceServer::new(InstanceManageRpcService::new(
+            manager.clone(),
+            Arc::new(DefaultHooks),
+        ));
+        assert!(registry.unregister(web_client, "").is_none());
+        let config = ConfigRpcServer::new(ConfigRpcService::new(manager.clone()));
+        assert!(registry.unregister(config, "").is_some());
     }
 }
