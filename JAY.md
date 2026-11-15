@@ -41,7 +41,9 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
    The built-in STUN lists also lose their `txt:` entries (a server list read from a DNS TXT record
    upstream controls), so there is no built-in IPv6 STUN server, and TCP NAT detection asks the
    servers given with `--stun-servers` instead of a separate built-in list of third-party servers.
-   Jay passes its own STUN list. (`easytier/src/common/dns.rs`, `easytier/src/common/stun.rs`,
+   Jay doesn't pass `--stun-servers` today, so the built-in UDP and TCP lists still apply; with an
+   explicit list, a server that only speaks UDP gives no TCP NAT result.
+   (`easytier/src/common/dns.rs`, `easytier/src/common/stun.rs`,
    `easytier/src/common/global_ctx.rs`)
 7. **Relay only stays relay only.** With `--disable-p2p` the node answers no address-list or
    hole-punch requests, makes no exception for peers that ask for p2p (`need_p2p`), and doesn't use
