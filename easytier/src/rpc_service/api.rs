@@ -453,7 +453,20 @@ mod jay_rpc_portal_tests {
         let inst_id = manager
             .run_network_instance(cfg.clone(), false, ConfigFileControl::STATIC_CONFIG)
             .unwrap();
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        // The instance starts on its own thread; wait (bounded) until its API service is up.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while manager.get_instance_service(&inst_id).is_none() {
+            let error = manager
+                .iter()
+                .find(|i| *i.key() == inst_id)
+                .and_then(|i| i.value().get_latest_error_msg());
+            assert!(error.is_none(), "instance failed to start: {error:?}");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "instance not ready after 30 s"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
         let instance = Some(InstanceIdentifier {
             selector: Some(Selector::Id(inst_id.into())),
         });
