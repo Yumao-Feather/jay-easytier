@@ -156,9 +156,15 @@ pub fn register_api_rpc_service(
         "",
     );
 
-    // Jay hardening: the local management API doesn't offer instance management (start,
-    // stop, replace or read whole instance configs). Only the web-client session, which
-    // this build refuses to start (`--config-server`), passes hooks and gets it.
+    registry.register(
+        PeerCenterRpcServer::new(PeerCenterManageRpcService::new(instance_manager.clone())),
+        "",
+    );
+
+    // Jay hardening: the local management API offers neither instance management (start,
+    // stop, replace or read whole instance configs) nor credential management (issue, list
+    // or revoke secure-mode credentials). Jay uses neither. Only the web-client session,
+    // which passes hooks and which this build refuses to start (`--config-server`), gets them.
     if let Some(hooks) = hooks {
         registry.register(
             WebClientServiceServer::new(InstanceManageRpcService::new(
@@ -167,17 +173,13 @@ pub fn register_api_rpc_service(
             )),
             "",
         );
+        registry.register(
+            CredentialManageRpcServer::new(CredentialManageRpcService::new(
+                instance_manager.clone(),
+            )),
+            "",
+        );
     }
-
-    registry.register(
-        PeerCenterRpcServer::new(PeerCenterManageRpcService::new(instance_manager.clone())),
-        "",
-    );
-
-    registry.register(
-        CredentialManageRpcServer::new(CredentialManageRpcService::new(instance_manager.clone())),
-        "",
-    );
 }
 
 // Jay hardening: the management API only ever listens on loopback. A bare port binds
@@ -265,7 +267,111 @@ mod jay_rpc_portal_tests {
             Arc::new(DefaultHooks),
         ));
         assert!(registry.unregister(web_client, "").is_none());
+        let credentials =
+            CredentialManageRpcServer::new(CredentialManageRpcService::new(manager.clone()));
+        assert!(registry.unregister(credentials, "").is_none());
         let config = ConfigRpcServer::new(ConfigRpcService::new(manager.clone()));
         assert!(registry.unregister(config, "").is_some());
+        let connectors =
+            ConnectorManageRpcServer::new(ConnectorManageRpcService::new(manager.clone()));
+        assert!(registry.unregister(connectors, "").is_some());
+    }
+
+    #[test]
+    fn web_client_session_keeps_management_services() {
+        use super::*;
+        use crate::web_client::DefaultHooks;
+
+        let manager = Arc::new(NetworkInstanceManager::new());
+        let registry = ServiceRegistry::new();
+        register_api_rpc_service(&manager, &registry, Some(Arc::new(DefaultHooks)));
+
+        let credentials =
+            CredentialManageRpcServer::new(CredentialManageRpcService::new(manager.clone()));
+        assert!(registry.unregister(credentials, "").is_some());
+    }
+
+    /// Over a real loopback connection, the credential calls are refused because the service
+    /// isn't there (not because no instance matched), while connector calls still reach theirs.
+    #[tokio::test]
+    async fn local_api_refuses_credential_calls() {
+        use super::*;
+        use crate::proto::{
+            api::instance::{
+                ConnectorManageRpc, ConnectorManageRpcClientFactory, CredentialManageRpc,
+                CredentialManageRpcClientFactory, GenerateCredentialRequest, ListConnectorRequest,
+                ListCredentialsRequest, RevokeCredentialRequest,
+            },
+            rpc_impl::standalone::StandAloneClient,
+            rpc_types::controller::BaseController,
+        };
+        use crate::tunnel::tcp::TcpTunnelConnector;
+
+        let manager = Arc::new(NetworkInstanceManager::new());
+        let server = ApiRpcServer::from_tunnel(
+            TcpTunnelListener::new("tcp://127.0.0.1:37419".parse().unwrap()),
+            manager,
+        )
+        .serve()
+        .await
+        .unwrap();
+
+        let mut client = StandAloneClient::new(TcpTunnelConnector::new(
+            "tcp://127.0.0.1:37419".parse().unwrap(),
+        ));
+        let credentials = client
+            .scoped_client::<CredentialManageRpcClientFactory<BaseController>>("".to_string())
+            .await
+            .unwrap();
+
+        let is_missing_service = |e: &Error| {
+            matches!(e, Error::InvalidServiceKey(name, _)
+                if name.trim_matches('"') == "CredentialManageRpc")
+        };
+        let err = credentials
+            .generate_credential(
+                BaseController::default(),
+                GenerateCredentialRequest {
+                    ttl_seconds: 3600,
+                    credential_id: Some("known-id".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(is_missing_service(&err), "generate: {err:?}");
+        let err = credentials
+            .list_credentials(BaseController::default(), ListCredentialsRequest::default())
+            .await
+            .unwrap_err();
+        assert!(is_missing_service(&err), "list: {err:?}");
+        let err = credentials
+            .revoke_credential(
+                BaseController::default(),
+                RevokeCredentialRequest {
+                    credential_id: "known-id".to_string(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(is_missing_service(&err), "revoke: {err:?}");
+
+        // The connector service is there: with no instance running it answers with an
+        // instance error, not a missing-service error.
+        let connectors = client
+            .scoped_client::<ConnectorManageRpcClientFactory<BaseController>>("".to_string())
+            .await
+            .unwrap();
+        let err = connectors
+            .list_connector(BaseController::default(), ListConnectorRequest::default())
+            .await
+            .unwrap_err();
+        assert!(
+            !matches!(err, Error::InvalidServiceKey(..)),
+            "connector: {err:?}"
+        );
+
+        drop(server);
     }
 }

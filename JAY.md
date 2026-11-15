@@ -18,7 +18,10 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
 2. **Management API on loopback only.** A bare `--rpc-portal <port>` used to bind `0.0.0.0`, and
    any address was accepted. It now binds `127.0.0.1`, and a non-loopback address is an error.
    On it, instance management (`WebClientService`: start, stop, replace or list whole instances)
-   isn't offered; `easytier-cli` already copes without it. `PatchConfig` only adds or removes
+   and credential management (`CredentialManageRpc`: issue, list or revoke secure-mode credentials)
+   aren't offered, so `easytier-cli credential` fails. `easytier-cli` copes without instance
+   management while the node runs one instance, which is how Jay runs it; with several, pick one
+   with `--instance-name` or `--instance-id`. `PatchConfig` only adds or removes
    connectors (what Jay's `connector add` uses), and `GetConfig` leaves out the network secret, the
    secure-mode private key and ACL group secrets. (`easytier/src/rpc_service/api.rs`,
    `easytier/src/rpc_service/config.rs`)
@@ -105,8 +108,8 @@ are only taken when Jay needs them. Watch the EasyTier repo's releases and the R
   quinn-udp 0.5.16 (receive loop could spin after a truncated datagram). Three more hickory-proto 0.25
   DNSSEC advisories (0530, 0531, 0532) are ignored for the same reason as the others: 0.25 isn't in
   Jay's build.
-  From the repository audit: the management API offers no instance management and
-  hands out no secrets (patch 2), `txt://` and `srv://` peer URLs are refused (patch 4), no `txt:`
+  From the repository audit: the management API offers no instance or credential management
+  and hands out no secrets (patch 2), `txt://` and `srv://` peer URLs are refused (patch 4), no `txt:`
   STUN entries and TCP STUN follows `--stun-servers` (patch 6), and tests that the refused features
   stay refused.
   Build and docs from the repository audit: pinned protoc in `build.rs`, named runner
