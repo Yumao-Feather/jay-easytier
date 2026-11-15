@@ -61,6 +61,13 @@ ignore = [
     "RUSTSEC-2026-0514", # hickory-resolver <0.26.2: with DNSSEC validation enabled, lookup() and
                          # lookup_ip() returned bogus records as Ok. Only with validation on; plain
                          # lookups are unchanged. Fixed in 0.26.2.
+    "RUSTSEC-2026-0530", # hickory-proto 0.25: parent-side NSEC at a zone cut accepted as proof of
+                         # nonexistence. Not in 0.26 (unaffected >=0.26.0-beta.1).
+    "RUSTSEC-2026-0531", # hickory-proto 0.25: child-side NSEC/NSEC3 accepted as proof of no DS
+                         # record. Not in 0.26.
+    "RUSTSEC-2026-0532", # hickory-proto 0.25: parent-side NSEC3 at a zone cut accepted as proof of
+                         # nonexistence. Not in 0.26. Checked 2026-11-14: hickory-proto@0.25.2 still
+                         # matches no package for Jay's features on Windows, macOS, Linux or Android.
 
     # --- In the build, reviewed, not reachable ---
     # quick-xml: only through plist in service-manager, which reads launchd plists when installing a
