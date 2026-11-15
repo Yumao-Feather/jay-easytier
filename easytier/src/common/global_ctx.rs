@@ -289,7 +289,10 @@ impl GlobalCtx {
 
         let stun_info_collector = StunInfoCollector::new_with_default_servers();
 
-        if let Some(stun_servers) = config_fs.get_stun_servers() {
+        let configured_stun = config_fs.get_stun_servers();
+        stun_info_collector
+            .set_tcp_stun_servers(Self::jay_tcp_stun_servers(configured_stun.as_ref()));
+        if let Some(stun_servers) = configured_stun {
             stun_info_collector.set_stun_servers(stun_servers);
         } else {
             stun_info_collector.set_stun_servers(StunInfoCollector::get_default_servers());
@@ -540,6 +543,15 @@ impl GlobalCtx {
     /// connects to itself (its relays) ever see its address.
     pub fn jay_relay_only(&self) -> bool {
         self.flags.load().disable_p2p
+    }
+
+    /// Jay: TCP NAT detection asks the servers given with `--stun-servers`, like UDP does,
+    /// instead of upstream's separate built-in list of third-party TCP STUN servers.
+    fn jay_tcp_stun_servers(configured: Option<&Vec<String>>) -> Vec<String> {
+        match configured {
+            Some(servers) => servers.clone(),
+            None => StunInfoCollector::get_default_tcp_servers(),
+        }
     }
 
     /// Jay: with no STUN servers the collector never learns (or asks a third party for) this
@@ -812,6 +824,23 @@ pub mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn jay_tcp_stun_follows_stun_servers() {
+        let configured = vec!["stun.example.org:3478".to_owned()];
+        assert_eq!(
+            GlobalCtx::jay_tcp_stun_servers(Some(&configured)),
+            configured
+        );
+        assert_eq!(
+            GlobalCtx::jay_tcp_stun_servers(Some(&Vec::new())),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            GlobalCtx::jay_tcp_stun_servers(None),
+            StunInfoCollector::get_default_tcp_servers()
+        );
+    }
 
     #[tokio::test]
     async fn test_global_ctx() {

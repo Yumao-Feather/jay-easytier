@@ -60,7 +60,12 @@ jobs:
             rpc_service::api::jay_rpc_portal_tests peers::encrypt common::dns::tests::jay \
             peers::peer_rpc_service::tests::jay connector::tests::jay connector::dns_connector::tests::jay \
             peers::peer_conn::tests::jay peers::peer_conn::tests::peer_conn_secure_mode_server_accept_legacy_client \
-            peers::peer_conn::tests::peer_conn_secure_mode_different_network_name_ok
+            peers::peer_conn::tests::peer_conn_secure_mode_different_network_name_ok \
+            rpc_service::config::jay_config_rpc_tests common::stun::tests::jay common::global_ctx::tests::jay \
+            core::tests::jay instance::instance::tests::jay \
+            peers::peer_conn::tests::peer_conn_unknown_credential_rejected \
+            peers::peer_conn::tests::peer_conn_revoked_credential_rejected \
+            peers::tests::unknown_credential_node_rejected
 
       # QUIC is in Jay's build (tunnel and proxy), so dependency updates there get a regression run:
       # connect, ping-pong over IPv4 and IPv6, endpoint cleanup and the proxy's ping. The two proxy

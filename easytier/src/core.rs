@@ -1331,15 +1331,20 @@ fn win_service_main(arg: Vec<std::ffi::OsString>) {
     win_service_event_loop(stop_notify_recv, cli, status_handle);
 }
 
+// Jay hardening: no remote management. --config-server hands the whole node to a web
+// console on another machine; Jay never uses it, so this build refuses to start with it.
+fn jay_refuse_remote_management(cli: &Cli) -> anyhow::Result<()> {
+    if cli.config_server.is_some() {
+        anyhow::bail!("--config-server (remote management) is disabled in this build");
+    }
+    Ok(())
+}
+
 async fn run_main(cli: Cli) -> anyhow::Result<()> {
     defer!(dump_profile(0););
     log::init(&cli.logging_options, true)?;
 
-    // Jay hardening: no remote management. --config-server hands the whole node to a web
-    // console on another machine; Jay never uses it, so this build refuses to start with it.
-    if cli.config_server.is_some() {
-        anyhow::bail!("--config-server (remote management) is disabled in this build");
-    }
+    jay_refuse_remote_management(&cli)?;
 
     let manager = Arc::new(NetworkInstanceManager::new().with_config_path(cli.config_dir.clone()));
 
@@ -1447,16 +1452,12 @@ async fn run_main(cli: Cli) -> anyhow::Result<()> {
             control.set_no_delete(true);
         }
 
+        // Jay hardening: the config holds the network secret and keys, so it isn't logged.
         log::info!(
-            "\
-            Starting easytier from config file {:?}({:?}) with config:\n\
-            ############### TOML ###############\n\
-            {}\n\
-            -----------------------------------\n\
-            ",
+            "Starting easytier from config file {:?}({:?}), instance {}",
             config_file,
             control.permission,
-            cfg.dump()
+            cfg.get_inst_name()
         );
         manager.run_network_instance(cfg, true, control)?;
     }
@@ -1466,14 +1467,10 @@ async fn run_main(cli: Cli) -> anyhow::Result<()> {
         cli.network_options
             .merge_into(&cfg)
             .with_context(|| "failed to create config from cli".to_string())?;
+        // Jay hardening: the config holds the network secret and keys, so it isn't logged.
         log::info!(
-            "\
-            Starting easytier from cli with config:\n\
-            ############### TOML ###############\n\
-            {}\n\
-            -----------------------------------\n\
-            ",
-            cfg.dump()
+            "Starting easytier from cli, instance {}",
+            cfg.get_inst_name()
         );
         manager.run_network_instance(cfg, true, ConfigFileControl::STATIC_CONFIG)?;
     }
@@ -1647,6 +1644,21 @@ async fn validate_config(cli: &Cli) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jay_config_server_is_refused() {
+        let cli = Cli::try_parse_from([
+            "easytier-core",
+            "--config-server",
+            "udp://example.org:22020",
+        ])
+        .unwrap();
+        let err = jay_refuse_remote_management(&cli).unwrap_err();
+        assert!(err.to_string().contains("disabled"), "{err}");
+
+        let cli = Cli::try_parse_from(["easytier-core"]).unwrap();
+        assert!(jay_refuse_remote_management(&cli).is_ok());
+    }
 
     #[test]
     fn test_parse_listeners() {

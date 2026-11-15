@@ -17,18 +17,34 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
    AEAD feature. (`easytier/src/peers/encrypt/mod.rs`)
 2. **Management API on loopback only.** A bare `--rpc-portal <port>` used to bind `0.0.0.0`, and
    any address was accepted. It now binds `127.0.0.1`, and a non-loopback address is an error.
-   (`easytier/src/rpc_service/api.rs`)
+   On it, instance management (`WebClientService`: start, stop, replace or list whole instances)
+   and credential management (`CredentialManageRpc`: issue, list or revoke secure-mode credentials)
+   aren't offered, so `easytier-cli credential` fails. `easytier-cli` copes without instance
+   management while the node runs one instance, which is how Jay runs it; with several, pick one
+   with `--instance-name` or `--instance-id`. `PatchConfig` only adds or removes
+   connectors (what Jay's `connector add` uses), and `GetConfig` leaves out the network secret, the
+   secure-mode private key and ACL group secrets. `ShowNodeInfo` (`easytier-cli node`) no longer
+   carries the whole config, so `node config` prints a note, and the startup log no longer prints
+   the config either. (`easytier/src/rpc_service/api.rs`, `config.rs`, `peer_manage.rs`,
+   `easytier/src/core.rs`, `easytier/src/instance/instance.rs`)
 3. **No remote management.** `--config-server` hands the whole node to a web console on another
    machine. Jay never uses it, so `easytier-core` refuses to start with it. (`easytier/src/core.rs`)
-4. **No VPN portal, no http(s) peer lists.** The WireGuard VPN portal opens an extra public port
-   for plain WireGuard clients, and an `http(s)://` peer URL lets that web server choose which
-   nodes this one joins. They can't be compiled out separately, so the build refuses them at runtime.
+4. **No VPN portal, no http(s) or DNS peer lists.** The WireGuard VPN portal opens an extra public
+   port for plain WireGuard clients, and an `http(s)://`, `txt://` or `srv://` peer URL lets whoever
+   runs that web server or DNS name choose which nodes this one joins. They can't be compiled out
+   separately, so the build refuses them at runtime.
    (`easytier/src/instance/instance.rs`, `easytier/src/connector/mod.rs`)
 5. **Fewer features.** Built with `--no-default-features --features
    wireguard,smoltcp,tun,socks5,quic,zstd`. Websocket, KCP, FakeTCP and magic DNS are left out.
 6. **No built-in public DNS servers.** When the system resolver failed, upstream also asked two fixed
    public DNS servers, in plain UDP, for the host name. Only the system's own name servers are used now.
-   (`easytier/src/common/dns.rs`)
+   The built-in STUN lists also lose their `txt:` entries (a server list read from a DNS TXT record
+   upstream controls), so there is no built-in IPv6 STUN server, and TCP NAT detection asks the
+   servers given with `--stun-servers` instead of a separate built-in list of third-party servers.
+   Jay doesn't pass `--stun-servers` today, so the built-in UDP and TCP lists still apply; with an
+   explicit list, a server that only speaks UDP gives no TCP NAT result.
+   (`easytier/src/common/dns.rs`, `easytier/src/common/stun.rs`,
+   `easytier/src/common/global_ctx.rs`)
 7. **Relay only stays relay only.** With `--disable-p2p` the node answers no address-list or
    hole-punch requests, makes no exception for peers that ask for p2p (`need_p2p`), and doesn't use
    STUN. (`easytier/src/peers/peer_rpc_service.rs`, `easytier/src/connector/`,
@@ -96,6 +112,10 @@ are only taken when Jay needs them. Watch the EasyTier repo's releases and the R
   quinn-udp 0.5.16 (receive loop could spin after a truncated datagram). Three more hickory-proto 0.25
   DNSSEC advisories (0530, 0531, 0532) are ignored for the same reason as the others: 0.25 isn't in
   Jay's build.
+  From the repository audit: the management API offers no instance or credential management
+  and hands out no secrets (patch 2), `txt://` and `srv://` peer URLs are refused (patch 4), no `txt:`
+  STUN entries and TCP STUN follows `--stun-servers` (patch 6), and tests that the refused features
+  stay refused.
   Build and docs from the repository audit: pinned protoc in `build.rs`, named runner
   images, Rust 1.95.0, toolchain details in `JAY-BUILD.txt`, upstream workflows removed, and the
   `--rpc-portal`, `--config-server` and `--vpn-portal` help (English and Chinese) now says what this

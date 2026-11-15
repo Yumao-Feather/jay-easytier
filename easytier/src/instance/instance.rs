@@ -651,9 +651,11 @@ impl Instance {
     pub fn new(config: impl ConfigLoader + 'static) -> Self {
         let global_ctx = Arc::new(GlobalCtx::new(config));
 
+        // Jay hardening: the config holds the network secret and keys, so it isn't logged.
         tracing::info!(
-            "[INIT] instance creating. config: {}",
-            global_ctx.config.dump()
+            "[INIT] instance creating. name: {}, id: {}",
+            global_ctx.config.get_inst_name(),
+            global_ctx.get_id()
         );
 
         let (peer_packet_sender, peer_packet_receiver) = create_packet_recv_chan();
@@ -1645,6 +1647,20 @@ mod tests {
         instance::instance::{InstanceConfigPatcher, InstanceRpcServerHook},
         proto::{api::config::InstanceConfigPatch, rpc_impl::standalone::RpcServerHook},
     };
+
+    #[tokio::test]
+    async fn jay_vpn_portal_is_refused() {
+        use crate::common::config::{ConfigLoader, TomlConfigLoader, VpnPortalConfig};
+
+        let config = TomlConfigLoader::default();
+        config.set_vpn_portal_config(VpnPortalConfig {
+            client_cidr: "10.14.14.0/24".parse().unwrap(),
+            wireguard_listen: "127.0.0.1:0".parse().unwrap(),
+        });
+        let mut instance = super::Instance::new(config);
+        let err = instance.run_vpn_portal().await.unwrap_err();
+        assert!(err.to_string().contains("disabled"), "{err}");
+    }
 
     #[tokio::test]
     async fn test_rpc_portal_whitelist() {
