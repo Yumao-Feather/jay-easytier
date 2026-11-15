@@ -63,6 +63,18 @@ jobs:
             rpc_service::config::jay_config_rpc_tests common::stun::tests::jay common::global_ctx::tests::jay \
             core::tests::jay instance::instance::tests::jay
 
+      # QUIC is in Jay's build (tunnel and proxy), so dependency updates there get a regression run:
+      # connect, ping-pong over IPv4 and IPv6, endpoint cleanup and the proxy's ping. The two proxy
+      # bandwidth tests stay ignored upstream (about 16 GB of memory).
+      - name: QUIC regression tests
+        run: |
+          set -o pipefail
+          cargo test --locked -p easytier --no-default-features --features "$JAY_FEATURES" --lib -- \
+            tunnel::quic::tests gateway::quic_proxy::tests 2>&1 | tee quic-tests.txt
+          # A filter that matches nothing still passes, so check the tests really ran.
+          grep -E "^test result: ok\. ([0-9]+) passed" quic-tests.txt
+          [ "$(grep -cE '^test (tunnel::quic|gateway::quic_proxy)::tests::.* \.\.\. ok$' quic-tests.txt)" -ge 9 ]
+
       # Fails the build (and so the release) on any advisory not reviewed in .cargo/audit.toml.
       # 0.21.x can't read the current advisory database, so it must be 0.22 or later.
       - name: Dependency audit (RustSec)
