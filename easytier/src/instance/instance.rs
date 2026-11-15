@@ -651,9 +651,11 @@ impl Instance {
     pub fn new(config: impl ConfigLoader + 'static) -> Self {
         let global_ctx = Arc::new(GlobalCtx::new(config));
 
+        // Jay hardening: the config holds the network secret and keys, so it isn't logged.
         tracing::info!(
-            "[INIT] instance creating. config: {}",
-            global_ctx.config.dump()
+            "[INIT] instance creating. name: {}, id: {}",
+            global_ctx.config.get_inst_name(),
+            global_ctx.get_id()
         );
 
         let (peer_packet_sender, peer_packet_receiver) = create_packet_recv_chan();

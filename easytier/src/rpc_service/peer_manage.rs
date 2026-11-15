@@ -108,9 +108,19 @@ impl PeerManageRpc for PeerManageRpcService {
         ctrl: Self::Controller,
         req: crate::proto::api::instance::ShowNodeInfoRequest,
     ) -> crate::proto::rpc_types::error::Result<instance::ShowNodeInfoResponse> {
-        super::get_instance_service(&self.instance_manager, &req.instance)?
+        let mut response = super::get_instance_service(&self.instance_manager, &req.instance)?
             .get_peer_manage_service()
             .show_node_info(ctrl, req)
-            .await
+            .await?;
+        // Jay hardening: the node's whole config (with its secrets) isn't handed out here.
+        // `GetConfig` gives the config without secrets.
+        if let Some(node_info) = response.node_info.as_mut() {
+            node_info.config = NODE_CONFIG_WITHHELD.to_owned();
+        }
+        Ok(response)
     }
 }
+
+/// What `ShowNodeInfo` returns in place of the node's config (`easytier-cli node config`).
+pub(crate) const NODE_CONFIG_WITHHELD: &str =
+    "# This build doesn't share the node's config here; use GetConfig, which leaves out secrets.\n";

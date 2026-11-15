@@ -1452,16 +1452,12 @@ async fn run_main(cli: Cli) -> anyhow::Result<()> {
             control.set_no_delete(true);
         }
 
+        // Jay hardening: the config holds the network secret and keys, so it isn't logged.
         log::info!(
-            "\
-            Starting easytier from config file {:?}({:?}) with config:\n\
-            ############### TOML ###############\n\
-            {}\n\
-            -----------------------------------\n\
-            ",
+            "Starting easytier from config file {:?}({:?}), instance {}",
             config_file,
             control.permission,
-            cfg.dump()
+            cfg.get_inst_name()
         );
         manager.run_network_instance(cfg, true, control)?;
     }
@@ -1471,14 +1467,10 @@ async fn run_main(cli: Cli) -> anyhow::Result<()> {
         cli.network_options
             .merge_into(&cfg)
             .with_context(|| "failed to create config from cli".to_string())?;
+        // Jay hardening: the config holds the network secret and keys, so it isn't logged.
         log::info!(
-            "\
-            Starting easytier from cli with config:\n\
-            ############### TOML ###############\n\
-            {}\n\
-            -----------------------------------\n\
-            ",
-            cfg.dump()
+            "Starting easytier from cli, instance {}",
+            cfg.get_inst_name()
         );
         manager.run_network_instance(cfg, true, ConfigFileControl::STATIC_CONFIG)?;
     }

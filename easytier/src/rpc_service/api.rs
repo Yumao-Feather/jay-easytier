@@ -302,23 +302,11 @@ mod jay_rpc_portal_tests {
                 CredentialManageRpcClientFactory, GenerateCredentialRequest, ListConnectorRequest,
                 ListCredentialsRequest, RevokeCredentialRequest,
             },
-            rpc_impl::standalone::StandAloneClient,
             rpc_types::controller::BaseController,
         };
-        use crate::tunnel::tcp::TcpTunnelConnector;
 
         let manager = Arc::new(NetworkInstanceManager::new());
-        let server = ApiRpcServer::from_tunnel(
-            TcpTunnelListener::new("tcp://127.0.0.1:37419".parse().unwrap()),
-            manager,
-        )
-        .serve()
-        .await
-        .unwrap();
-
-        let mut client = StandAloneClient::new(TcpTunnelConnector::new(
-            "tcp://127.0.0.1:37419".parse().unwrap(),
-        ));
+        let (server, mut client) = local_api(manager).await;
         let credentials = client
             .scoped_client::<CredentialManageRpcClientFactory<BaseController>>("".to_string())
             .await
@@ -373,5 +361,204 @@ mod jay_rpc_portal_tests {
         );
 
         drop(server);
+    }
+
+    /// A local management API on a free loopback port, and a client connected to it.
+    async fn local_api(
+        manager: std::sync::Arc<crate::instance_manager::NetworkInstanceManager>,
+    ) -> (
+        super::ApiRpcServer<crate::tunnel::tcp::TcpTunnelListener>,
+        crate::proto::rpc_impl::standalone::StandAloneClient<
+            crate::tunnel::tcp::TcpTunnelConnector,
+        >,
+    ) {
+        use super::ApiRpcServer;
+        use crate::proto::rpc_impl::standalone::StandAloneClient;
+        use crate::tunnel::tcp::{TcpTunnelConnector, TcpTunnelListener};
+
+        let port = crate::utils::find_free_tcp_port(20000..30000).expect("no free tcp port");
+        let url = format!("tcp://127.0.0.1:{port}");
+        let server =
+            ApiRpcServer::from_tunnel(TcpTunnelListener::new(url.parse().unwrap()), manager)
+                .serve()
+                .await
+                .unwrap();
+        let client = StandAloneClient::new(TcpTunnelConnector::new(url.parse().unwrap()));
+        (server, client)
+    }
+
+    /// A running instance holds a network secret, a secure-mode private key and an ACL group
+    /// secret. None of them comes back over the local API, the instance keeps them, and the
+    /// status and connector calls Jay uses still work.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn local_api_hands_out_no_secrets() {
+        use super::*;
+        use crate::common::config::{
+            ConfigFileControl, ConfigLoader, NetworkIdentity, TomlConfigLoader,
+        };
+        use crate::proto::{
+            acl::{Acl, AclV1, GroupIdentity, GroupInfo},
+            api::{
+                config::{
+                    ConfigPatchAction, ConfigRpc, ConfigRpcClientFactory, GetConfigRequest,
+                    InstanceConfigPatch, PatchConfigRequest, UrlPatch,
+                },
+                instance::{
+                    ConnectorManageRpc, ConnectorManageRpcClientFactory, InstanceIdentifier,
+                    ListConnectorRequest, PeerManageRpc, PeerManageRpcClientFactory,
+                    ShowNodeInfoRequest, instance_identifier::Selector,
+                },
+            },
+            common::SecureModeConfig,
+            rpc_types::controller::BaseController,
+        };
+        use base64::Engine as _;
+
+        const NETWORK_SECRET: &str = "jay-test-network-secret";
+        const GROUP_SECRET: &str = "jay-test-group-secret";
+        let private = x25519_dalek::StaticSecret::random_from_rng(rand::rngs::OsRng);
+        let public = x25519_dalek::PublicKey::from(&private);
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let private_key = b64.encode(private.to_bytes());
+
+        let cfg = TomlConfigLoader::new_from_str("listeners = []").unwrap();
+        cfg.set_inst_name("jay-secret-test".into());
+        cfg.set_network_identity(NetworkIdentity::new(
+            "jay-net".into(),
+            NETWORK_SECRET.into(),
+        ));
+        cfg.set_secure_mode(Some(SecureModeConfig {
+            enabled: true,
+            local_private_key: Some(private_key.clone()),
+            local_public_key: Some(b64.encode(public.as_bytes())),
+        }));
+        cfg.set_acl(Some(Acl {
+            acl_v1: Some(AclV1 {
+                chains: vec![],
+                group: Some(GroupInfo {
+                    declares: vec![GroupIdentity {
+                        group_name: "g".into(),
+                        group_secret: GROUP_SECRET.into(),
+                    }],
+                    members: vec![],
+                }),
+            }),
+        }));
+        let mut flags = cfg.get_flags();
+        flags.no_tun = true;
+        cfg.set_flags(flags);
+
+        let manager = Arc::new(NetworkInstanceManager::new());
+        let inst_id = manager
+            .run_network_instance(cfg.clone(), false, ConfigFileControl::STATIC_CONFIG)
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let instance = Some(InstanceIdentifier {
+            selector: Some(Selector::Id(inst_id.into())),
+        });
+
+        let (server, mut client) = local_api(manager.clone()).await;
+        let assert_no_secret = |what: &str, text: &str| {
+            for secret in [NETWORK_SECRET, GROUP_SECRET, private_key.as_str()] {
+                assert!(!text.contains(secret), "{what} leaks a secret");
+            }
+        };
+
+        let peers = client
+            .scoped_client::<PeerManageRpcClientFactory<BaseController>>("".to_string())
+            .await
+            .unwrap();
+        let node = peers
+            .show_node_info(
+                BaseController::default(),
+                ShowNodeInfoRequest {
+                    instance: instance.clone(),
+                },
+            )
+            .await
+            .unwrap()
+            .node_info
+            .unwrap();
+        assert_no_secret("ShowNodeInfo", &format!("{node:?}"));
+        assert_eq!(
+            node.config,
+            crate::rpc_service::peer_manage::NODE_CONFIG_WITHHELD
+        );
+        assert_eq!(node.inst_id, inst_id.to_string());
+
+        let config = client
+            .scoped_client::<ConfigRpcClientFactory<BaseController>>("".to_string())
+            .await
+            .unwrap();
+        let got = config
+            .get_config(
+                BaseController::default(),
+                GetConfigRequest {
+                    instance: instance.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_no_secret("GetConfig", &format!("{got:?}"));
+        assert_eq!(got.config.unwrap().network_name.as_deref(), Some("jay-net"));
+
+        // Connector add and remove still work.
+        let url: url::Url = "tcp://192.0.2.1:11010".parse().unwrap();
+        let connectors = client
+            .scoped_client::<ConnectorManageRpcClientFactory<BaseController>>("".to_string())
+            .await
+            .unwrap();
+        let list = || async {
+            connectors
+                .list_connector(
+                    BaseController::default(),
+                    ListConnectorRequest {
+                        instance: instance.clone(),
+                    },
+                )
+                .await
+                .unwrap()
+                .connectors
+                .iter()
+                .any(|c| c.url.as_ref().map(|u| u.url.as_str()) == Some(url.as_str()))
+        };
+        for (action, present) in [
+            (ConfigPatchAction::Add, true),
+            (ConfigPatchAction::Remove, false),
+        ] {
+            config
+                .patch_config(
+                    BaseController::default(),
+                    PatchConfigRequest {
+                        instance: instance.clone(),
+                        patch: Some(InstanceConfigPatch {
+                            connectors: vec![UrlPatch {
+                                action: action.into(),
+                                url: Some(url.clone().into()),
+                            }],
+                            ..Default::default()
+                        }),
+                    },
+                )
+                .await
+                .unwrap();
+            assert_eq!(list().await, present, "{action:?}");
+        }
+
+        // The instance itself still has its secrets.
+        assert_eq!(
+            cfg.get_network_identity().network_secret.as_deref(),
+            Some(NETWORK_SECRET)
+        );
+        assert_eq!(
+            cfg.get_secure_mode().unwrap().local_private_key.as_deref(),
+            Some(private_key.as_str())
+        );
+        let group = cfg.get_acl().unwrap().acl_v1.unwrap().group.unwrap();
+        assert_eq!(group.declares[0].group_secret, GROUP_SECRET);
+
+        drop(server);
+        manager.delete_network_instance(vec![inst_id]).unwrap();
     }
 }

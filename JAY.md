@@ -23,8 +23,10 @@ upstream release zips. EasyTier is LGPL-3.0, and so is everything here.
    management while the node runs one instance, which is how Jay runs it; with several, pick one
    with `--instance-name` or `--instance-id`. `PatchConfig` only adds or removes
    connectors (what Jay's `connector add` uses), and `GetConfig` leaves out the network secret, the
-   secure-mode private key and ACL group secrets. (`easytier/src/rpc_service/api.rs`,
-   `easytier/src/rpc_service/config.rs`)
+   secure-mode private key and ACL group secrets. `ShowNodeInfo` (`easytier-cli node`) no longer
+   carries the whole config, so `node config` prints a note, and the startup log no longer prints
+   the config either. (`easytier/src/rpc_service/api.rs`, `config.rs`, `peer_manage.rs`,
+   `easytier/src/core.rs`, `easytier/src/instance/instance.rs`)
 3. **No remote management.** `--config-server` hands the whole node to a web console on another
    machine. Jay never uses it, so `easytier-core` refuses to start with it. (`easytier/src/core.rs`)
 4. **No VPN portal, no http(s) or DNS peer lists.** The WireGuard VPN portal opens an extra public
