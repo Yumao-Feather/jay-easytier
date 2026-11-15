@@ -363,11 +363,39 @@ mod jay_rpc_portal_tests {
         drop(server);
     }
 
-    /// A local management API on a free loopback port, and a client connected to it.
+    /// A TCP listener on `127.0.0.1:0` that reports the port it got once it listens, so the
+    /// test connects to the socket it holds (no probe-then-bind race).
+    struct LoopbackListener {
+        inner: crate::tunnel::tcp::TcpTunnelListener,
+        bound: Option<tokio::sync::oneshot::Sender<url::Url>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::tunnel::TunnelListener for LoopbackListener {
+        async fn listen(&mut self) -> Result<(), crate::tunnel::TunnelError> {
+            self.inner.listen().await?;
+            if let Some(bound) = self.bound.take() {
+                let _ = bound.send(self.inner.local_url());
+            }
+            Ok(())
+        }
+
+        async fn accept(
+            &mut self,
+        ) -> Result<Box<dyn crate::tunnel::Tunnel>, crate::tunnel::TunnelError> {
+            self.inner.accept().await
+        }
+
+        fn local_url(&self) -> url::Url {
+            self.inner.local_url()
+        }
+    }
+
+    /// A local management API on a loopback port the OS picks, and a client connected to it.
     async fn local_api(
         manager: std::sync::Arc<crate::instance_manager::NetworkInstanceManager>,
     ) -> (
-        super::ApiRpcServer<crate::tunnel::tcp::TcpTunnelListener>,
+        super::ApiRpcServer<LoopbackListener>,
         crate::proto::rpc_impl::standalone::StandAloneClient<
             crate::tunnel::tcp::TcpTunnelConnector,
         >,
@@ -376,14 +404,18 @@ mod jay_rpc_portal_tests {
         use crate::proto::rpc_impl::standalone::StandAloneClient;
         use crate::tunnel::tcp::{TcpTunnelConnector, TcpTunnelListener};
 
-        let port = crate::utils::find_free_tcp_port(20000..30000).expect("no free tcp port");
-        let url = format!("tcp://127.0.0.1:{port}");
-        let server =
-            ApiRpcServer::from_tunnel(TcpTunnelListener::new(url.parse().unwrap()), manager)
-                .serve()
-                .await
-                .unwrap();
-        let client = StandAloneClient::new(TcpTunnelConnector::new(url.parse().unwrap()));
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let listener = LoopbackListener {
+            inner: TcpTunnelListener::new("tcp://127.0.0.1:0".parse().unwrap()),
+            bound: Some(tx),
+        };
+        let server = ApiRpcServer::from_tunnel(listener, manager)
+            .serve()
+            .await
+            .unwrap();
+        let url = rx.await.unwrap();
+        assert_ne!(url.port(), Some(0));
+        let client = StandAloneClient::new(TcpTunnelConnector::new(url));
         (server, client)
     }
 
