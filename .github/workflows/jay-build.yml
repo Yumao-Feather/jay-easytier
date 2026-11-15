@@ -61,6 +61,21 @@ jobs:
             peers::peer_conn::tests::jay peers::peer_conn::tests::peer_conn_secure_mode_server_accept_legacy_client \
             peers::peer_conn::tests::peer_conn_secure_mode_different_network_name_ok
 
+      # QUIC is in Jay's build (tunnel and proxy), so dependency updates there get a regression run:
+      # connect, ping-pong over IPv4 and IPv6, endpoint cleanup and the proxy's ping. The two proxy
+      # bandwidth tests stay ignored upstream (about 16 GB of memory). ipv6_domain_pingpong is skipped
+      # because it resolves an external host name, so DNS trouble would fail the gate; ipv6_pingpong
+      # and quic_pingpong cover the same paths on the loopback addresses.
+      - name: QUIC regression tests
+        run: |
+          set -o pipefail
+          cargo test --locked -p easytier --no-default-features --features "$JAY_FEATURES" --lib -- \
+            tunnel::quic::tests gateway::quic_proxy::tests --skip ipv6_domain_pingpong 2>&1 | tee quic-tests.txt
+          # A filter that matches nothing still passes, so check the tests really ran.
+          grep -E "^test result: ok\. ([0-9]+) passed" quic-tests.txt
+          [ "$(grep -cE '^test (tunnel::quic|gateway::quic_proxy)::tests::.* \.\.\. ok$' quic-tests.txt)" -ge 8 ]
+          ! grep -q 'ipv6_domain_pingpong' quic-tests.txt
+
       # Fails the build (and so the release) on any advisory not reviewed in .cargo/audit.toml.
       # 0.21.x can't read the current advisory database, so it must be 0.22 or later.
       - name: Dependency audit (RustSec)

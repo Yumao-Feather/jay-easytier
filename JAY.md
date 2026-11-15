@@ -85,7 +85,11 @@ are only taken when Jay needs them. Watch the EasyTier repo's releases and the R
 - **jay-v2.6.4-5** (pending). Checked upstream up to main 3b32aaf (2026-11-12). Ported #2818 (patch 8). Not
   applicable: web console heartbeat fixes (#2718, no config server), http(s) discovery changes (#2748,
   #2783, removed by patch 4), BufPool fixes (#2634) and the Rust 1.95 NIC workaround (#2703), whose code
-  isn't in v2.6.4.
+  isn't in v2.6.4. RustSec (2026-11-14): quinn-proto 0.11.19 (a MAX_STREAM_DATA frame could open
+  streams beyond the limit; a long Retry token could panic or exhaust memory in a client) and
+  quinn-udp 0.5.16 (receive loop could spin after a truncated datagram). Three more hickory-proto 0.25
+  DNSSEC advisories (0530, 0531, 0532) are ignored for the same reason as the others: 0.25 isn't in
+  Jay's build.
 
 ## Updating to a new upstream version
 
